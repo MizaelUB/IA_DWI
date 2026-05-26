@@ -1,0 +1,19 @@
+# API y servidor
+fastapi==0.136.1
+uvicorn==0.47.0
+pydantic==2.13.4
+
+# HTTP
+requests==2.34.2
+
+# Base de datos (PostgreSQL / Supabase)
+psycopg2-binary==2.9.12
+python-dotenv==1.2.2
+
+# Base vectorial (RAG / ChromaDB)
+chromadb==1.5.9
+
+# Procesamiento de documentos (PDF e indexación)
+PyMuPDF==1.27.2.3
+langchain-text-splitters==1.1.2
+langchain-core==1.4.0
