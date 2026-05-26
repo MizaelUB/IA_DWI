@@ -1,0 +1,1245 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Swingtails RAG Sandbox</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;800&family=Outfit:wght@300;400;500;600;700;900&display=swap"
+        rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+    <style>
+        :root {
+            --bg-color: #ffffff;
+            --panel-bg: #fdfcfb;
+            --card-bg: #ffffff;
+            --primary: #C8A796;
+            --primary-glow: rgba(200, 167, 150, 0.25);
+            --secondary: #693F36;
+            --text-main: #3e322f;
+            --text-muted: #8c7b77;
+            --border-color: rgba(105, 63, 54, 0.15);
+            --badge-vector: #693F36;
+            --badge-lexical: #C8A796;
+            --msg-user-bg: var(--secondary);
+            --msg-bot-bg: #f3efe9;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Outfit', sans-serif;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(105, 63, 54, 0.2) transparent;
+        }
+
+        /* Scrollbars customization */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: rgba(105, 63, 54, 0.2);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(105, 63, 54, 0.35);
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1.2rem 2rem;
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border-color);
+            z-index: 10;
+        }
+
+        .logo-container {
+            display: flex;
+            align-items: center;
+            gap: 0.8rem;
+        }
+
+        .logo-icon {
+            font-size: 1.8rem;
+            filter: drop-shadow(0 0 8px var(--primary-glow));
+        }
+
+        .logo-text h1 {
+            font-size: 1.4rem;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+            color: var(--secondary);
+        }
+
+        .logo-text p {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            font-weight: 400;
+        }
+
+        .controls-container {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            padding: 0.5rem 0.8rem;
+            border-radius: 8px;
+            transition: all 0.2s ease;
+        }
+
+        .control-group:hover {
+            border-color: rgba(105, 63, 54, 0.25);
+        }
+
+        .control-group span {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            user-select: none;
+        }
+
+        .control-group select {
+            background: transparent;
+            border: none;
+            color: var(--text-main);
+            font-size: 0.85rem;
+            font-weight: 600;
+            outline: none;
+            cursor: pointer;
+            padding: 0 0.2rem;
+            font-family: 'Outfit', sans-serif;
+        }
+
+        .control-group select option {
+            background-color: #ffffff;
+            color: var(--text-main);
+        }
+
+        .model-select {
+            background: var(--card-bg);
+            color: var(--text-main);
+            border: 1px solid var(--border-color);
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            outline: none;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .model-select:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 10px rgba(200, 167, 150, 0.25);
+        }
+
+        .clear-btn {
+            background: rgba(239, 68, 68, 0.08);
+            color: #ef4444;
+            border: 1px solid rgba(239, 68, 68, 0.2);
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 0.9rem;
+            transition: all 0.2s ease;
+        }
+
+        .clear-btn:hover {
+            background: rgba(239, 68, 68, 0.15);
+            transform: translateY(-1px);
+        }
+
+        /* Layout Grid */
+        main {
+            flex: 1;
+            display: grid;
+            grid-template-columns: 3fr 2fr;
+            overflow: hidden;
+            position: relative;
+            min-height: 0;
+        }
+
+        /* Left Panel - Chat */
+        .chat-panel {
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid var(--border-color);
+            height: 100%;
+            background: var(--panel-bg);
+            backdrop-filter: blur(10px);
+            overflow: hidden;
+            min-height: 0;
+        }
+
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+            min-height: 0;
+        }
+
+        .message {
+            display: flex;
+            flex-direction: column;
+            max-width: 80%;
+            animation: fadeInMessage 0.3s ease forwards;
+        }
+
+        @keyframes fadeInMessage {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .message.user {
+            align-self: flex-end;
+        }
+
+        .message.assistant {
+            align-self: flex-start;
+        }
+
+        .message-bubble {
+            padding: 1rem 1.25rem;
+            border-radius: 16px;
+            font-size: 0.95rem;
+            line-height: 1.5;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+        }
+
+        .message.user .message-bubble {
+            background: var(--msg-user-bg);
+            color: #fff;
+            border-bottom-right-radius: 4px;
+        }
+
+        .message.assistant .message-bubble {
+            background: var(--msg-bot-bg);
+            color: var(--text-main);
+            border: 1px solid var(--border-color);
+            border-bottom-left-radius: 4px;
+        }
+
+        /* Estilos Markdown dentro de burbujas */
+        .message-bubble p {
+            margin-bottom: 0.5rem;
+        }
+
+        .message-bubble p:last-child {
+            margin-bottom: 0;
+        }
+
+        .message-bubble ul,
+        .message-bubble ol {
+            margin-left: 1.2rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .message-bubble li {
+            margin-bottom: 0.25rem;
+        }
+
+        .message-bubble li:last-child {
+            margin-bottom: 0;
+        }
+
+        .message.assistant .message-bubble strong {
+            font-weight: 700;
+            color: var(--secondary);
+        }
+
+        .message.user .message-bubble strong {
+            font-weight: 700;
+            color: #ffffff;
+        }
+
+        .message-bubble em {
+            font-style: italic;
+        }
+
+        .message-bubble code {
+            font-family: 'JetBrains Mono', monospace;
+            background: rgba(105, 63, 54, 0.08);
+            padding: 0.15rem 0.35rem;
+            border-radius: 4px;
+            font-size: 0.85rem;
+            color: var(--secondary);
+        }
+
+        .message-bubble pre {
+            background: rgba(105, 63, 54, 0.04);
+            padding: 0.8rem 1rem;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin: 0.6rem 0;
+            border: 1px solid var(--border-color);
+        }
+
+        .message-bubble pre code {
+            background: transparent;
+            padding: 0;
+            color: var(--text-main);
+            font-size: 0.85rem;
+        }
+
+        .message.assistant .message-bubble h1,
+        .message.assistant .message-bubble h2,
+        .message.assistant .message-bubble h3 {
+            font-size: 1.05rem;
+            font-weight: 700;
+            margin: 0.8rem 0 0.4rem 0;
+            color: var(--secondary);
+        }
+
+        .message.assistant .message-bubble h1:first-child,
+        .message.assistant .message-bubble h2:first-child,
+        .message.assistant .message-bubble h3:first-child {
+            margin-top: 0;
+        }
+
+        .message-sender {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-bottom: 0.3rem;
+            font-weight: 500;
+        }
+
+        .message.user .message-sender {
+            align-self: flex-end;
+        }
+
+        /* Loading Skeleton */
+        .skeleton-loader {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            width: 100%;
+        }
+
+        .skeleton-line {
+            height: 12px;
+            background-color: rgba(105, 63, 54, 0.08);
+            animation: loadingPulse 1.5s infinite ease-in-out;
+            border-radius: 4px;
+        }
+
+        @keyframes loadingPulse {
+
+            0%,
+            100% {
+                opacity: 0.6;
+            }
+
+            50% {
+                opacity: 1;
+            }
+        }
+
+        /* Input Area */
+        .chat-input-area {
+            padding: 1.5rem 2rem;
+            background: #ffffff;
+            border-top: 1px solid var(--border-color);
+        }
+
+        .input-form {
+            display: flex;
+            gap: 0.8rem;
+            background: #ffffff;
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 0.4rem 0.5rem 0.4rem 1.2rem;
+            transition: all 0.3s ease;
+        }
+
+        .input-form:focus-within {
+            border-color: var(--primary);
+            box-shadow: 0 0 15px rgba(200, 167, 150, 0.25);
+            background: #ffffff;
+        }
+
+        .chat-input {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: var(--text-main);
+            font-size: 0.95rem;
+            outline: none;
+            padding: 0.6rem 0;
+        }
+
+        .chat-input::placeholder {
+            color: var(--text-muted);
+        }
+
+        .send-btn {
+            background: var(--secondary);
+            color: #fff;
+            border: none;
+            padding: 0.6rem 1.4rem;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+
+        .send-btn:hover {
+            opacity: 0.9;
+            transform: scale(1.02);
+            box-shadow: 0 0 10px rgba(105, 63, 54, 0.2);
+        }
+
+        /* Right Panel - RAG Inspector */
+        .inspector-panel {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            overflow-y: auto;
+            padding: 2rem;
+            background: #fdfcfb;
+            gap: 2rem;
+        }
+
+        .panel-title {
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: var(--text-main);
+            letter-spacing: 0.5px;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            border-left: 3px solid var(--primary);
+            padding-left: 0.6rem;
+            margin-bottom: 1rem;
+        }
+
+        /* Metrics Card Section */
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 1rem;
+        }
+
+        .metric-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1.2rem;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+            overflow: hidden;
+            transition: all 0.2s ease;
+        }
+
+        .metric-card:hover {
+            border-color: rgba(105, 63, 54, 0.25);
+            transform: translateY(-2px);
+        }
+
+        .metric-card.full-width {
+            grid-column: span 2;
+        }
+
+        .metric-label {
+            font-size: 0.75rem;
+            font-weight: 500;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 0.5rem;
+        }
+
+        .metric-value {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 1.6rem;
+            font-weight: 800;
+            color: var(--text-main);
+        }
+
+        .metric-unit {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            font-weight: 400;
+        }
+
+        .metric-indicator {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            height: 3px;
+            background: var(--primary);
+            width: 0%;
+            transition: width 0.8s cubic-bezier(0.1, 0.8, 0.2, 1);
+        }
+
+        .metric-card:nth-child(1) .metric-indicator {
+            background: #C8A796;
+        }
+
+        .metric-card:nth-child(2) .metric-indicator {
+            background: #aa8572;
+        }
+
+        .metric-card:nth-child(3) .metric-indicator {
+            background: #693F36;
+        }
+
+        /* Context Card Section */
+        .context-list {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .context-placeholder {
+            background: rgba(105, 63, 54, 0.04);
+            border: 1px dashed var(--border-color);
+            border-radius: 12px;
+            padding: 3rem 1rem;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+
+        .context-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1.2rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.8rem;
+            transition: all 0.2s ease;
+        }
+
+        .context-card:hover {
+            border-color: rgba(105, 63, 54, 0.25);
+        }
+
+        .context-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.8rem;
+        }
+
+        .doc-badge {
+            background: rgba(105, 63, 54, 0.06);
+            color: var(--text-main);
+            padding: 0.25rem 0.6rem;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 0.75rem;
+            border: 1px solid rgba(105, 63, 54, 0.12);
+            max-width: 60%;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .doc-badge.pdf {
+            background: rgba(239, 68, 68, 0.08);
+            color: #ef4444;
+            border-color: rgba(239, 68, 68, 0.15);
+        }
+
+        .doc-badge.md {
+            background: rgba(105, 63, 54, 0.08);
+            color: #693F36;
+            border-color: rgba(105, 63, 54, 0.15);
+        }
+
+        .distance-badge {
+            font-family: 'JetBrains Mono', monospace;
+            padding: 0.25rem 0.6rem;
+            border-radius: 6px;
+            font-weight: 700;
+            font-size: 0.75rem;
+        }
+
+        .distance-badge.vectorial {
+            background: rgba(105, 63, 54, 0.08);
+            color: #693F36;
+            border: 1px solid rgba(105, 63, 54, 0.2);
+        }
+
+        .distance-badge.lexical {
+            background: rgba(200, 167, 150, 0.12);
+            color: #8c6a59;
+            border: 1px solid rgba(200, 167, 150, 0.25);
+        }
+
+        .distance-badge.database {
+            background: rgba(192, 132, 252, 0.15);
+            color: #a855f7;
+            border: 1px solid rgba(192, 132, 252, 0.3);
+        }
+
+        .doc-badge.database {
+            background: rgba(192, 132, 252, 0.1);
+            color: #8b5cf6;
+            border: 1px solid rgba(192, 132, 252, 0.2);
+        }
+
+        .context-theme {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--text-main);
+        }
+
+        .context-body {
+            font-size: 0.85rem;
+            color: var(--text-main);
+            line-height: 1.5;
+            background: rgba(105, 63, 54, 0.04);
+            padding: 0.8rem;
+            border-radius: 8px;
+            white-space: pre-wrap;
+            max-height: 150px;
+            overflow-y: auto;
+            border: 1px solid var(--border-color);
+            font-family: 'Outfit', sans-serif;
+        }
+
+        /* Empty state UI */
+        .empty-chat {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 100%;
+            color: var(--text-muted);
+            gap: 1rem;
+            text-align: center;
+            padding: 2rem;
+        }
+
+        .empty-chat-icon {
+            font-size: 3rem;
+            opacity: 0.5;
+            animation: bounceIcon 2s infinite ease-in-out;
+        }
+
+        @keyframes bounceIcon {
+
+            0%,
+            100% {
+                transform: translateY(0);
+            }
+
+            50% {
+                transform: translateY(-8px);
+            }
+        }
+
+        /* Toggle Switch & Concept Tags */
+        .toggle-container {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            cursor: pointer;
+            user-select: none;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            padding: 0.5rem 0.8rem;
+            border-radius: 8px;
+            transition: all 0.2s ease;
+        }
+
+        .toggle-container:hover {
+            border-color: rgba(105, 63, 54, 0.25);
+        }
+
+        .toggle-container input {
+            display: none;
+        }
+
+        .toggle-slider {
+            position: relative;
+            width: 32px;
+            height: 18px;
+            background-color: rgba(105, 63, 54, 0.08);
+            border-radius: 9px;
+            transition: all 0.3s ease;
+            border: 1px solid var(--border-color);
+        }
+
+        .toggle-slider::before {
+            content: "";
+            position: absolute;
+            width: 12px;
+            height: 12px;
+            left: 2px;
+            bottom: 2px;
+            background-color: var(--text-muted);
+            border-radius: 50%;
+            transition: all 0.3s ease;
+        }
+
+        .toggle-container input:checked+.toggle-slider {
+            background-color: var(--primary);
+            box-shadow: 0 0 8px var(--primary-glow);
+        }
+
+        .toggle-container input:checked+.toggle-slider::before {
+            transform: translateX(14px);
+            background-color: #fff;
+        }
+
+        .toggle-label {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--text-main);
+        }
+
+        .concept-tag {
+            display: inline-block;
+            background: rgba(200, 167, 150, 0.12);
+            color: #8c6a59;
+            border: 1px solid rgba(200, 167, 150, 0.25);
+            padding: 0.2rem 0.5rem;
+            border-radius: 6px;
+            font-size: 0.8rem;
+            font-weight: 500;
+            margin: 0.2rem;
+        }
+
+        /* Collapsible Inspector Panel */
+        main.hide-inspector {
+            grid-template-columns: 1fr;
+        }
+
+        main.hide-inspector .inspector-panel {
+            display: none;
+        }
+
+        .toggle-inspector-btn {
+            background: rgba(105, 63, 54, 0.08);
+            color: var(--secondary);
+            border: 1px solid rgba(105, 63, 54, 0.2);
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 0.9rem;
+            transition: all 0.2s ease;
+        }
+
+        .toggle-inspector-btn:hover {
+            background: rgba(105, 63, 54, 0.15);
+            transform: translateY(-1px);
+        }
+
+        /* Responsive Design */
+        @media (max-width: 900px) {
+            main {
+                grid-template-columns: 1fr;
+                grid-template-rows: 1fr 1fr;
+            }
+
+            .chat-panel {
+                border-right: none;
+                border-bottom: 1px solid var(--border-color);
+            }
+
+            body {
+                overflow-y: auto;
+                height: auto;
+            }
+
+            main {
+                height: calc(200vh - 120px);
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <header>
+        <div class="logo-container">
+            <span class="logo-icon">🐾</span>
+            <div class="logo-text">
+                <h1>Swingtails</h1>
+                <p>Prueba de RAG</p>
+            </div>
+        </div>
+        <div class="controls-container">
+            <label class="toggle-container" style="display: none;"
+                title="Permite que la IA busque conceptos relacionados en RAG de forma autónoma">
+                <input type="checkbox" id="autonomousSearchToggle">
+                <span class="toggle-slider"></span>
+                <span class="toggle-label">Búsqueda IA</span>
+            </label>
+
+            <div class="control-group"
+                title="ID de la clínica veterinaria para iniciar sesión como su agente (vacío para global)">
+                <span>ID Veterinaria</span>
+                <input type="number" id="veterinaryIdInput" placeholder="Global" min="1"
+                    style="width: 70px; background: transparent; border: none; outline: none; color: var(--text-main); font-weight: 600; font-size: 0.85rem; font-family: 'Outfit', sans-serif;">
+            </div>
+
+            <div class="control-group"
+                title="Límitación en la cantidad de fragmentos del contexto recuperados para evitar saturación">
+                <span>Límite Chunks</span>
+                <select id="limitChunksSelect">
+                    <option value="3">3</option>
+                    <option value="5" selected>5</option>
+                    <option value="8">8</option>
+                    <option value="10">10</option>
+                    <option value="15">15</option>
+                </select>
+            </div>
+
+            <div class="control-group" title="Modelo principal utilizado para la respuesta final al usuario">
+                <span>Modelo Principal</span>
+                <select id="modelSelect">
+                    <option value="llama3.2:3b" selected>Llama 3.2 3B</option>
+                    <option value="LiquidAI/lfm2.5-1.2b-instruct:latest">LiquidAI LFM 2.5</option>
+                    <option value="lfm2.5-thinking:1.2b">LFM Thinking 1.2B</option>
+                    <option value="qwen3:4b">Qwen 3 4B</option>
+                    <option value="qwen2.5-coder:7b">Qwen 2.5 Coder 7B</option>
+                    <option value="deepseek-coder:6.7b">DeepSeek Coder 6.7B</option>
+                </select>
+            </div>
+
+            <button id="toggleInspectorBtn" class="toggle-inspector-btn">Mostrar Inspector</button>
+            <button id="clearBtn" class="clear-btn">Limpiar Chat</button>
+        </div>
+    </header>
+
+    <main>
+        <section class="chat-panel">
+            <div class="chat-messages" id="chatMessages">
+                <div class="empty-chat" id="emptyChatState">
+                    <span class="empty-chat-icon">💬</span>
+                    <h3>¡Bienvenido al Sandbox RAG de Swingtails!</h3>
+                    <p>Haz cualquier pregunta relacionada con el plan estratégico, procesos o mercadotecnia
+                        veterinaria.<br>El sistema buscará en los documentos indexados y mostrará los resultados aquí.
+                    </p>
+                </div>
+            </div>
+
+            <div class="chat-input-area">
+                <form class="input-form" id="chatForm">
+                    <input type="text" id="userInput" class="chat-input"
+                        placeholder="Pregunta sobre Swingtails (ej. ¿Que es Swingtails?)..." autocomplete="off"
+                        required>
+                    <button type="submit" class="send-btn" id="sendBtn">
+                        <span>Enviar</span>
+                    </button>
+                </form>
+            </div>
+        </section>
+
+        <section class="inspector-panel">
+            <div>
+                <h2 class="panel-title">Métricas de Rendimiento</h2>
+                <div class="metrics-grid">
+                    <div class="metric-card">
+                        <span class="metric-label">Tiempo Total</span>
+                        <span class="metric-value" id="metricTotal">0.0<span class="metric-unit">s</span></span>
+                        <div class="metric-indicator" id="indTotal"></div>
+                    </div>
+                    <div class="metric-card">
+                        <span class="metric-label">Consulta Chroma</span>
+                        <span class="metric-value" id="metricChroma">0<span class="metric-unit">ms</span></span>
+                        <div class="metric-indicator" id="indChroma"></div>
+                    </div>
+                    <div class="metric-card">
+                        <span class="metric-label">Generación LLM</span>
+                        <span class="metric-value" id="metricLlm">0.0<span class="metric-unit">s</span></span>
+                        <div class="metric-indicator" id="indLlm"></div>
+                    </div>
+                    <div class="metric-card">
+                        <span class="metric-label">Fragmentos Clave</span>
+                        <span class="metric-value" id="metricChunks">0 <span class="metric-unit">chunks</span></span>
+                        <div class="metric-indicator" id="indChunks" style="width: 100%;"></div>
+                    </div>
+                    <div class="metric-card full-width">
+                        <span class="metric-label">Búsqueda Léxica vs Semántica</span>
+                        <span class="metric-value" style="font-size: 1.1rem;" id="metricSearchType">N/A</span>
+                    </div>
+                    <div class="metric-card full-width" id="conceptsCard"
+                        style="display: none; flex-direction: column;">
+                        <span class="metric-label">Conceptos Relacionados Generados</span>
+                        <div class="metric-value" style="font-size: 0.95rem; font-weight: normal; margin-top: 0.5rem;"
+                            id="metricConcepts">N/A</div>
+                    </div>
+                </div>
+            </div>
+
+            <div>
+                <h2 class="panel-title">Contexto Recuperado (RAG Chunks)</h2>
+                <div class="context-list" id="contextList">
+                    <div class="context-placeholder" id="contextPlaceholder">
+                        Envía un mensaje en el chat para visualizar las fuentes y los fragmentos recuperados de la base
+                        de datos vectorial.
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        const chatForm = document.getElementById('chatForm');
+        const userInput = document.getElementById('userInput');
+        const chatMessages = document.getElementById('chatMessages');
+        const emptyChatState = document.getElementById('emptyChatState');
+        const modelSelect = document.getElementById('modelSelect');
+        const limitChunksSelect = document.getElementById('limitChunksSelect');
+        const clearBtn = document.getElementById('clearBtn');
+        const sendBtn = document.getElementById('sendBtn');
+        const autonomousSearchToggle = document.getElementById('autonomousSearchToggle');
+        const toggleInspectorBtn = document.getElementById('toggleInspectorBtn');
+        const mainElement = document.querySelector('main');
+
+        // Check if there is a saved preference, otherwise default to hidden
+        const inspectorHidden = localStorage.getItem('inspectorHidden') !== 'false';
+        if (inspectorHidden) {
+            mainElement.classList.add('hide-inspector');
+            toggleInspectorBtn.textContent = 'Mostrar Inspector';
+        } else {
+            mainElement.classList.remove('hide-inspector');
+            toggleInspectorBtn.textContent = 'Ocultar Inspector';
+        }
+
+        toggleInspectorBtn.addEventListener('click', () => {
+            const isHidden = mainElement.classList.toggle('hide-inspector');
+            toggleInspectorBtn.textContent = isHidden ? 'Mostrar Inspector' : 'Ocultar Inspector';
+            localStorage.setItem('inspectorHidden', isHidden);
+        });
+        const conceptsCard = document.getElementById('conceptsCard');
+        const metricConcepts = document.getElementById('metricConcepts');
+
+        // Métricas
+        const metricTotal = document.getElementById('metricTotal');
+        const metricChroma = document.getElementById('metricChroma');
+        const metricLlm = document.getElementById('metricLlm');
+        const metricChunks = document.getElementById('metricChunks');
+        const metricSearchType = document.getElementById('metricSearchType');
+
+        // Indicadores visuales
+        const indTotal = document.getElementById('indTotal');
+        const indChroma = document.getElementById('indChroma');
+        const indLlm = document.getElementById('indLlm');
+
+        // Contexto
+        const contextList = document.getElementById('contextList');
+        const contextPlaceholder = document.getElementById('contextPlaceholder');
+
+        let chatHistory = [];
+
+        // Limpiar el chat
+        clearBtn.addEventListener('click', () => {
+            chatMessages.innerHTML = '';
+            chatMessages.appendChild(emptyChatState);
+            emptyChatState.style.display = 'flex';
+            contextList.innerHTML = '';
+            contextList.appendChild(contextPlaceholder);
+            resetMetrics();
+            chatHistory = [];
+        });
+
+        function resetMetrics() {
+            metricTotal.innerHTML = '0.0<span class="metric-unit">s</span>';
+            metricChroma.innerHTML = '0<span class="metric-unit">ms</span>';
+            metricLlm.innerHTML = '0.0<span class="metric-unit">s</span>';
+            metricChunks.innerHTML = '0 <span class="metric-unit">chunks</span>';
+            metricSearchType.textContent = 'N/A';
+            indTotal.style.width = '0%';
+            indChroma.style.width = '0%';
+            indLlm.style.width = '0%';
+            conceptsCard.style.display = 'none';
+            metricConcepts.innerHTML = 'N/A';
+        }
+
+        // Form Submit
+        chatForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const text = userInput.value.trim();
+            if (!text) return;
+
+            // Ocultar pantalla de bienvenida
+            if (emptyChatState) {
+                emptyChatState.style.display = 'none';
+            }
+
+            // Agregar mensaje de usuario
+            appendMessage('user', text);
+            userInput.value = '';
+            userInput.focus();
+
+            // Agregar bubble de carga del bot
+            const loadingMsgId = appendLoadingMessage();
+
+            // Deshabilitar envío mientras procesa
+            sendBtn.disabled = true;
+
+            const vetIdVal = document.getElementById('veterinaryIdInput').value.trim();
+            const veterinaryId = vetIdVal ? parseInt(vetIdVal) : null;
+
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        question: text,
+                        model: modelSelect.value,
+                        // Se utiliza el mismo modelo principal para evitar intercambios en VRAM
+                        concept_model: modelSelect.value,
+                        limit_chunks: parseInt(limitChunksSelect.value),
+                        history: chatHistory,
+                        autonomous_search: autonomousSearchToggle.checked,
+                        veterinary_id: veterinaryId
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error('Error en el servidor API');
+                }
+
+                const data = await response.json();
+
+                // Remover burbuja de carga e insertar respuesta real
+                removeLoadingMessage(loadingMsgId);
+                appendMessage('assistant', data.answer);
+
+                // Guardar en historial
+                chatHistory.push({ role: 'user', content: text });
+                chatHistory.push({ role: 'assistant', content: data.answer });
+
+                // Actualizar métricas e inspector
+                updateInspector(data);
+
+            } catch (err) {
+                console.error(err);
+                removeLoadingMessage(loadingMsgId);
+                appendMessage('assistant', `⚠️ Ocurrió un error al procesar tu solicitud: ${err.message}`);
+            } finally {
+                sendBtn.disabled = false;
+            }
+        });
+
+        function appendMessage(sender, text) {
+            const msgDiv = document.createElement('div');
+            msgDiv.className = `message ${sender}`;
+
+            const senderLabel = document.createElement('span');
+            senderLabel.className = 'message-sender';
+            senderLabel.textContent = sender === 'user' ? 'Tú' : 'Swingtails AI';
+
+            const bubble = document.createElement('div');
+            bubble.className = 'message-bubble';
+
+            if (sender === 'assistant') {
+                // Interpretar Markdown usando marked
+                bubble.innerHTML = marked.parse(text);
+            } else {
+                bubble.textContent = text;
+            }
+
+            msgDiv.appendChild(senderLabel);
+            msgDiv.appendChild(bubble);
+
+            chatMessages.appendChild(msgDiv);
+            scrollToBottom();
+        }
+
+        function appendLoadingMessage() {
+            const msgId = 'loading-' + Date.now();
+            const msgDiv = document.createElement('div');
+            msgDiv.className = 'message assistant';
+            msgDiv.id = msgId;
+
+            const senderLabel = document.createElement('span');
+            senderLabel.className = 'message-sender';
+            senderLabel.textContent = 'Swingtails AI';
+
+            const bubble = document.createElement('div');
+            bubble.className = 'message-bubble';
+            bubble.style.width = '200px';
+
+            const loader = document.createElement('div');
+            loader.className = 'skeleton-loader';
+            loader.innerHTML = `
+                <div class="skeleton-line" style="width: 80%"></div>
+                <div class="skeleton-line" style="width: 95%"></div>
+                <div class="skeleton-line" style="width: 60%"></div>
+            `;
+
+            bubble.appendChild(loader);
+            msgDiv.appendChild(senderLabel);
+            msgDiv.appendChild(bubble);
+
+            chatMessages.appendChild(msgDiv);
+            scrollToBottom();
+            return msgId;
+        }
+
+        function removeLoadingMessage(id) {
+            const loadingMsg = document.getElementById(id);
+            if (loadingMsg) {
+                loadingMsg.remove();
+            }
+        }
+
+        function scrollToBottom() {
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        function updateInspector(data) {
+            // Conceptos relacionados generados
+            if (data.concepts && data.concepts.length > 0) {
+                conceptsCard.style.display = 'flex';
+                metricConcepts.innerHTML = data.concepts.map(c => `<span class="concept-tag">${escapeHTML(c)}</span>`).join('');
+            } else {
+                conceptsCard.style.display = 'none';
+                metricConcepts.innerHTML = 'N/A';
+            }
+
+            const m = data.metrics;
+
+            // Actualizar valores de métricas
+            const totalS = (m.total_time_ms / 1000).toFixed(2);
+            const llmS = (m.llm_time_ms / 1000).toFixed(2);
+
+            metricTotal.innerHTML = `${totalS}<span class="metric-unit">s</span>`;
+            metricChroma.innerHTML = `${m.retrieval_time_ms}<span class="metric-unit">ms</span>`;
+            metricLlm.innerHTML = `${llmS}<span class="metric-unit">s</span>`;
+            metricChunks.innerHTML = `${m.chunks_retrieved} <span class="metric-unit">chunks</span>`;
+
+            // Tipo de búsqueda
+            if (data.search_mode === 'database') {
+                metricSearchType.innerHTML = `<span style="color: #a855f7; font-weight: bold;">Consulta BD (Function Calling)</span>`;
+            } else if (m.chunks_retrieved === 0) {
+                metricSearchType.innerHTML = `<span style="color: #ef4444; font-weight: bold;">Sin Contexto (Fallback Activado)</span>`;
+            } else {
+                metricSearchType.innerHTML = `
+                    <span style="color: #60a5fa; font-weight: bold;">Semántica (${m.chunks_retrieved - m.lexical_matches_count})</span> + 
+                    <span style="color: #34d399; font-weight: bold;">Léxica (${m.lexical_matches_count})</span>
+                `;
+            }
+
+            // Animar barras indicadoras (normalizadas contra máximos empíricos aproximados)
+            const pctTotal = Math.min((m.total_time_ms / 8000) * 100, 100);
+            const pctChroma = Math.min((m.retrieval_time_ms / 200) * 100, 100);
+            const pctLlm = Math.min((m.llm_time_ms / 7000) * 100, 100);
+
+            indTotal.style.width = `${pctTotal}%`;
+            indChroma.style.width = `${pctChroma}%`;
+            indLlm.style.width = `${pctLlm}%`;
+
+            // Actualizar lista de contexto
+            contextList.innerHTML = '';
+
+            if (!data.context || data.context.length === 0) {
+                contextList.innerHTML = `
+                    <div class="context-placeholder" style="color: #f87171; border-color: rgba(239, 68, 68, 0.25); background: rgba(239, 68, 68, 0.05);">
+                        ⚠️ No se recuperaron fragmentos del contexto. El modelo respondió con su prompt estricto predeterminado.
+                    </div>
+                `;
+                return;
+            }
+
+            data.context.forEach(chunk => {
+                const card = document.createElement('div');
+                card.className = 'context-card';
+
+                let badgeClass = 'md';
+                let fileType = 'DOC';
+
+                if (chunk.type === 'database') {
+                    badgeClass = 'database';
+                    fileType = 'SQL';
+                } else {
+                    const isPdf = chunk.source.toLowerCase().endsWith('.pdf');
+                    badgeClass = isPdf ? 'pdf' : 'md';
+                    fileType = isPdf ? 'PDF' : 'MD';
+                }
+
+                // Distance format
+                let distText = '';
+                let distClass = '';
+                if (chunk.type === 'database') {
+                    distText = 'BASE DE DATOS';
+                    distClass = 'database';
+                } else if (chunk.type === 'lexical') {
+                    distText = 'LÉXICA';
+                    distClass = 'lexical';
+                } else {
+                    distText = `DIST: ${chunk.distance.toFixed(4)}`;
+                    distClass = 'vectorial';
+                }
+
+                card.innerHTML = `
+                    <div class="context-header">
+                        <span class="doc-badge ${badgeClass}" title="${chunk.source}">${fileType} | ${chunk.source}</span>
+                        <span class="distance-badge ${distClass}">${distText}</span>
+                    </div>
+                    <div class="context-theme">${chunk.theme}</div>
+                    <div class="context-body">${escapeHTML(chunk.text)}</div>
+                `;
+                contextList.appendChild(card);
+            });
+        }
+
+        function escapeHTML(str) {
+            return str
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+    </script>
+</body>
+
+</html>
