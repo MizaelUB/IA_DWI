@@ -240,7 +240,7 @@ def consultar_rag(pregunta: str, coleccion, modelo_llm: str = "llama3.2:3b", aut
     contexto_recuperado_ordenado = "\n\n".join(docs)
     
     prompt_sistema = f"""
-Eres un asistente virtual de Swingtails sumamente estricto, diseñado para brindar soporte y guiar a médicos veterinarios en la gestión y procesos de sus clínicas. Tu única fuente de verdad es el CONTEXTO proporcionado. No menciones que tienes un contexto.
+Eres un asistente virtual de Swingtails (una plataforma de gestión de citas veterinarias) sumamente estricto, diseñado para brindar soporte y guiar a médicos veterinarios en la gestión y procesos de sus clínicas. Tu única fuente de verdad es el CONTEXTO proporcionado. No menciones que tienes un contexto.
 
 CONTEXTO:
 {contexto_recuperado_ordenado}

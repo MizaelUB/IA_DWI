@@ -113,7 +113,7 @@ def api_chat(req: ChatRequest):
             print(f"Error al buscar nombre de veterinaria activa: {e}")
     
     if es_saludo(pregunta_original):
-        prompt_sistema = "Eres el asistente virtual de Swingtails. Saluda de manera amable, profesional y muy concisa. Dile brevemente que estás listo para responder preguntas sobre Swingtails, procesos de la clínica o mercadotecnia veterinaria."
+        prompt_sistema = "Eres el asistente virtual de Swingtails, una plataforma de gestión de citas veterinarias. Saluda de manera amable, profesional y muy concisa. Dile brevemente que estás listo para responder preguntas sobre Swingtails, procesos de la clínica o mercadotecnia veterinaria."
         inicio_llm = time.time()
         url = "http://localhost:11434/api/chat"
         payload = {
@@ -308,7 +308,7 @@ def api_chat(req: ChatRequest):
     url = "http://localhost:11434/api/chat"
     
     año_actual = datetime.date.today().year
-    prompt_herramientas = f"""Eres el asistente virtual de la clínica veterinaria '{nombre_vet_activo or "Swingtails"}'.
+    prompt_herramientas = f"""Eres el asistente virtual de la clínica veterinaria '{nombre_vet_activo or "Swingtails"}'. Swingtails es una plataforma de gestión de citas veterinarias.
 El año actual es {año_actual}.
 
 REGLAS DE SELECCIÓN DE HERRAMIENTAS:
@@ -348,6 +348,16 @@ REGLAS DE SELECCIÓN DE HERRAMIENTAS:
                 tool_calls_detected = message_resp["tool_calls"]
     except Exception as e:
         print(f"Error al detectar herramientas en Ollama: {e}")
+
+    if "swingtails" in normalizar_texto(pregunta_original):
+        tiene_rag_tool = any(tc.get("function", {}).get("name") == "consultar_manuales_y_procesos_generales" for tc in tool_calls_detected)
+        if not tiene_rag_tool:
+            tool_calls_detected.append({
+                "function": {
+                    "name": "consultar_manuales_y_procesos_generales",
+                    "arguments": {"pregunta": pregunta_original}
+                }
+            })
 
     if tool_calls_detected:
         print(f"✔ Herramientas detectadas por Ollama: {tool_calls_detected}")
@@ -448,7 +458,7 @@ REGLAS DE SELECCIÓN DE HERRAMIENTAS:
         if context_chunks:
             db_context_str = "\n\n".join([c["text"] for c in context_chunks])
             
-            prompt_sistema_final = f"""Eres el asistente virtual de la clínica veterinaria '{nombre_vet_activo or "Swingtails"}' dirigido a médicos veterinarios, administradores y clientes. Tu única fuente de verdad para esta respuesta es la INFORMACIÓN OBTENIDA abajo.
+            prompt_sistema_final = f"""Eres el asistente virtual de la clínica veterinaria '{nombre_vet_activo or "Swingtails"}' dirigido a médicos veterinarios, administradores y clientes. Swingtails es una plataforma de gestión de citas veterinarias. Tu única fuente de verdad para esta respuesta es la INFORMACIÓN OBTENIDA abajo.
             
 INFORMACIÓN OBTENIDA DE LA CLÍNICA:
 {db_context_str}
