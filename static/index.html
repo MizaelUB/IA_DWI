@@ -808,7 +808,7 @@
             <span class="logo-icon">🐾</span>
             <div class="logo-text">
                 <h1>Swingtails</h1>
-                <p>Prueba de RAG</p>
+                <p>Prueba de RAG <span id="conversationIdDisplay" style="margin-left: 10px; font-size: 0.75rem; opacity: 0.7; font-family: monospace;"></span></p>
             </div>
         </div>
         <div class="controls-container">
@@ -823,6 +823,13 @@
                 title="ID de la clínica veterinaria para iniciar sesión como su agente (vacío para global)">
                 <span>ID Veterinaria</span>
                 <input type="number" id="veterinaryIdInput" placeholder="Global" min="1"
+                    style="width: 70px; background: transparent; border: none; outline: none; color: var(--text-main); font-weight: 600; font-size: 0.85rem; font-family: 'Outfit', sans-serif;">
+            </div>
+
+            <div class="control-group"
+                title="ID de usuario simulado para pruebas locales">
+                <span>ID Usuario</span>
+                <input type="number" id="userIdInput" placeholder="Simulado" min="1" value="1"
                     style="width: 70px; background: transparent; border: none; outline: none; color: var(--text-main); font-weight: 600; font-size: 0.85rem; font-family: 'Outfit', sans-serif;">
             </div>
 
@@ -976,6 +983,20 @@
         const contextPlaceholder = document.getElementById('contextPlaceholder');
 
         let chatHistory = [];
+        let currentConversationId = null;
+        let isFollowUp = false;
+        const conversationIdDisplay = document.getElementById('conversationIdDisplay');
+
+        function updateConversationId(id) {
+            currentConversationId = id;
+            if (id) {
+                conversationIdDisplay.textContent = `(ID: ${id.substring(0, 8)}...)`;
+                conversationIdDisplay.title = id;
+            } else {
+                conversationIdDisplay.textContent = '';
+                conversationIdDisplay.title = '';
+            }
+        }
 
         // Limpiar el chat
         clearBtn.addEventListener('click', () => {
@@ -986,7 +1007,53 @@
             contextList.appendChild(contextPlaceholder);
             resetMetrics();
             chatHistory = [];
+            updateConversationId(null);
+            isFollowUp = false;
         });
+
+        // Resetear conversación al cambiar de veterinaria/usuario y cargar su historial activo
+        async function loadActiveSessionHistory() {
+            const vetIdVal = document.getElementById('veterinaryIdInput').value.trim();
+            const veterinaryId = vetIdVal ? parseInt(vetIdVal) : null;
+            
+            const userIdVal = document.getElementById('userIdInput').value.trim();
+            const userId = userIdVal ? parseInt(userIdVal) : 1;
+            
+            chatMessages.innerHTML = '';
+            chatMessages.appendChild(emptyChatState);
+            emptyChatState.style.display = 'flex';
+            contextList.innerHTML = '';
+            contextList.appendChild(contextPlaceholder);
+            resetMetrics();
+            chatHistory = [];
+            updateConversationId(null);
+            isFollowUp = false;
+            
+            if (veterinaryId === null) return;
+            
+            try {
+                const response = await fetch(`/api/chat/history?veterinary_id=${veterinaryId}&user_id=${userId}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.conversation_id) {
+                        updateConversationId(data.conversation_id);
+                        if (data.history && data.history.length > 0) {
+                            emptyChatState.style.display = 'none';
+                            data.history.forEach(msg => {
+                                appendMessage(msg.role, msg.content);
+                                chatHistory.push({ role: msg.role, content: msg.content });
+                            });
+                        }
+                    }
+                }
+            } catch (err) {
+                console.error("Error al cargar historial activo:", err);
+            }
+        }
+
+        document.getElementById('veterinaryIdInput').addEventListener('input', loadActiveSessionHistory);
+        document.getElementById('userIdInput').addEventListener('input', loadActiveSessionHistory);
+        window.addEventListener('DOMContentLoaded', loadActiveSessionHistory);
 
         function resetMetrics() {
             metricTotal.innerHTML = '0.0<span class="metric-unit">s</span>';
@@ -1025,6 +1092,9 @@
 
             const vetIdVal = document.getElementById('veterinaryIdInput').value.trim();
             const veterinaryId = vetIdVal ? parseInt(vetIdVal) : null;
+            
+            const userIdVal = document.getElementById('userIdInput').value.trim();
+            const userId = userIdVal ? parseInt(userIdVal) : 1;
 
             try {
                 const response = await fetch('/api/chat', {
@@ -1038,7 +1108,10 @@
                         limit_chunks: parseInt(limitChunksSelect.value),
                         history: chatHistory,
                         autonomous_search: autonomousSearchToggle.checked,
-                        veterinary_id: veterinaryId
+                        veterinary_id: veterinaryId,
+                        conversation_id: currentConversationId,
+                        is_follow_up: isFollowUp,
+                        user_id: userId
                     })
                 });
 
@@ -1055,6 +1128,10 @@
                 // Guardar en historial
                 chatHistory.push({ role: 'user', content: text });
                 chatHistory.push({ role: 'assistant', content: data.answer });
+                
+                // Actualizar conversation_id
+                updateConversationId(data.conversation_id);
+                isFollowUp = true;
 
                 // Actualizar métricas e inspector
                 updateInspector(data);

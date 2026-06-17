@@ -13,6 +13,8 @@ import re
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from recuperacion import cargar_base_vectorial, extraer_palabras_clave, es_seccion_query, tiene_coincidencia_palabras, normalizar_texto, obtener_conceptos_relacionados
 import db_client
+import uuid
+import session_store
 
 app = FastAPI(title="Swingtails RAG Sandbox API")
 coleccion = None
@@ -40,6 +42,12 @@ def calentar_modelo_ollama(modelo: str = "llama3.2:3b"):
 def startup_event():
     global coleccion
     try:
+        session_store.inicializar_db()
+        print("Base de datos SQLite de sesiones inicializada.")
+    except Exception as e:
+        print(f"Error al inicializar la base de datos de sesiones: {e}")
+        
+    try:
         coleccion = cargar_base_vectorial()
         print("Base vectorial cargada exitosamente en el servidor FastAPI.")
     except Exception as e:
@@ -60,11 +68,10 @@ class ChatRequest(BaseModel):
     history: List[Message] = []
     autonomous_search: bool = False
     veterinary_id: int | None = None
+    conversation_id: str | None = None
+    user_id: int | None = None
+    is_follow_up: bool = False
 
-def es_saludo(texto):
-    saludos = {"hola", "buenas", "buenos dias", "buenas tardes", "buenas noches", "como estas", "que tal", "hello", "hi"}
-    texto_limpio = re.sub(r'[¿?.,;:!]', '', normalizar_texto(texto)).strip()
-    return texto_limpio in saludos or any(texto_limpio.startswith(s + " ") for s in saludos)
 
 def parsear_fecha(fecha_str: str, año_defecto: int) -> str:
     """
@@ -102,6 +109,19 @@ def api_chat(req: ChatRequest):
     pregunta_original = req.question
     modelo_llm = req.model
     
+    conversation_id = req.conversation_id
+    user_id = req.user_id or 1
+    
+    if not conversation_id and req.veterinary_id is not None:
+        conversation_id = session_store.obtener_conversacion_activa(req.veterinary_id, user_id)
+        
+    if not conversation_id:
+        conversation_id = str(uuid.uuid4())
+        
+    vet_id_sesion = session_store.obtener_veterinary_id_de_sesion(conversation_id)
+    if vet_id_sesion is not None:
+        req.veterinary_id = vet_id_sesion
+
     nombre_vet_activo = None
     if req.veterinary_id is not None:
         try:
@@ -111,38 +131,6 @@ def api_chat(req: ChatRequest):
                 print(f"[DEBUG] Veterinaria activa seleccionada por ID {req.veterinary_id}: {nombre_vet_activo}")
         except Exception as e:
             print(f"Error al buscar nombre de veterinaria activa: {e}")
-    
-    if es_saludo(pregunta_original):
-        prompt_sistema = "Eres el asistente virtual de Swingtails, una plataforma de gestión de citas veterinarias. Saluda de manera amable, profesional y muy concisa. Dile brevemente que estás listo para responder preguntas sobre Swingtails, procesos de la clínica o mercadotecnia veterinaria."
-        inicio_llm = time.time()
-        url = "http://localhost:11434/api/chat"
-        payload = {
-            "model": modelo_llm,
-            "messages": [
-                {"role": "system", "content": prompt_sistema},
-                {"role": "user", "content": pregunta_original}
-            ],
-            "stream": False,
-            "keep_alive": -1
-        }
-        try:
-            respuesta = requests.post(url, json=payload, timeout=30)
-            answer = respuesta.json()['message']['content']
-        except Exception as e:
-            answer = f"Error al generar saludo: {e}"
-            
-        return {
-            "answer": answer,
-            "context": [],
-            "metrics": {
-                "retrieval_time_ms": 0,
-                "llm_time_ms": int((time.time() - inicio_llm) * 1000),
-                "total_time_ms": int((time.time() - inicio_total) * 1000),
-                "chunks_retrieved": 0,
-                "lexical_matches_count": 0,
-                "average_distance": 0.0
-            }
-        }
         
     # Definición de herramientas para Function Calling
     db_tools = [
@@ -319,10 +307,25 @@ REGLAS DE SELECCIÓN DE HERRAMIENTAS:
 5. Si la pregunta requiere buscar citas por fecha, formatea los argumentos 'fecha_inicio' y 'fecha_fin' ESTRICTAMENTE en YYYY-MM-DD.
 6. IMPORTANTE: Como solo conoces el año {año_actual}, si el usuario usa términos relativos ('mañana', 'hoy') sin dar fecha exacta, PÍDELE amablemente el día y mes exacto.
 7. REGLA CRÍTICA DE FORMATO: Al llenar los argumentos de las herramientas, SIEMPRE usa los valores reales de texto o número. NUNCA devuelvas diccionarios internos con las palabras 'description' o 'type'."""
-    messages_with_history = [{"role": "system", "content": prompt_herramientas}]
-    for msg in req.history:
-        messages_with_history.append({"role": msg.role, "content": msg.content})
-    messages_with_history.append({"role": "user", "content": pregunta_original})
+    history = session_store.obtener_historial(conversation_id)
+    if not history:
+        session_store.guardar_mensaje(conversation_id, "system", prompt_herramientas, req.veterinary_id, user_id)
+        session_store.guardar_mensaje(conversation_id, "user", pregunta_original, req.veterinary_id, user_id)
+        history = [
+            {"role": "system", "content": prompt_herramientas},
+            {"role": "user", "content": pregunta_original}
+        ]
+    else:
+        session_store.guardar_mensaje(conversation_id, "user", pregunta_original, req.veterinary_id, user_id)
+        history.append({"role": "user", "content": pregunta_original})
+        
+    # Si es seguimiento, tomamos los últimos 5, si no (chat recién abierto/primera consulta), tomamos 10
+    limit = 5 if req.is_follow_up else 10
+    messages_with_history = history[-limit:] if len(history) > limit else history
+    if not messages_with_history or messages_with_history[0]["role"] != "system":
+        messages_with_history = [{"role": "system", "content": prompt_herramientas}] + messages_with_history
+    else:
+        messages_with_history = [{"role": "system", "content": prompt_herramientas}] + messages_with_history[1:]
 
      
 
@@ -473,12 +476,15 @@ INSTRUCCIONES DE RESPUESTA:
 7. Si el resultado de buscar mascotas contiene múltiples mascotas con el mismo nombre y el usuario no especificó el parámetro 'pet_id', debes listar todas las mascotas encontradas (con sus respectivos IDs, especie, raza y dueño) y preguntarle explícitamente al usuario que te indique el ID de la mascota específica.
 """
             inicio_llm = time.time()
+            messages_final = history[-limit:] if len(history) > limit else history
+            if not messages_final or messages_final[0]["role"] != "system":
+                messages_final = [{"role": "system", "content": prompt_sistema_final}] + messages_final
+            else:
+                messages_final = [{"role": "system", "content": prompt_sistema_final}] + messages_final[1:]
+
             payload_final = {
                 "model": modelo_llm,
-                "messages": [
-                    {"role": "system", "content": prompt_sistema_final},
-                    {"role": "user", "content": pregunta_original}
-                ],
+                "messages": messages_final,
                 "stream": False,
                 "keep_alive": -1,
                 "options": {
@@ -495,9 +501,12 @@ INSTRUCCIONES DE RESPUESTA:
             except Exception as e:
                 answer = f"Falla de conexión al generar respuesta final con Ollama: {e}"
                 
+            session_store.guardar_mensaje(conversation_id, "assistant", answer, req.veterinary_id, user_id)
+                
             fin_total = time.time()
             return {
                 "answer": answer,
+                "conversation_id": conversation_id,
                 "context": context_chunks,
                 "search_mode": "rag" if contiene_rag else "database",
                 "concepts": [],
@@ -513,8 +522,11 @@ INSTRUCCIONES DE RESPUESTA:
 
     # CIERRE DE SEGURIDAD (SIN FALLBACK RAG)
     fin_total = time.time()
+    answer_fallback = "No pude identificar la información solicitada ni una herramienta adecuada para buscarla. ¿Podrías ser más específico o reformular tu pregunta?"
+    session_store.guardar_mensaje(conversation_id, "assistant", answer_fallback, req.veterinary_id, user_id)
     return {
-        "answer": "No pude identificar la información solicitada ni una herramienta adecuada para buscarla. ¿Podrías ser más específico o reformular tu pregunta?",
+        "answer": answer_fallback,
+        "conversation_id": conversation_id,
         "context": [],
         "search_mode": "none",
         "concepts": [],
@@ -527,6 +539,18 @@ INSTRUCCIONES DE RESPUESTA:
             "average_distance": 0.0
         }
     }
+
+@app.get("/api/chat/history")
+def get_chat_history(conversation_id: str | None = None, veterinary_id: int | None = None, user_id: int | None = None):
+    user_id = user_id or 1
+    if not conversation_id and veterinary_id is not None:
+        conversation_id = session_store.obtener_conversacion_activa(veterinary_id, user_id)
+    
+    if not conversation_id:
+        return {"conversation_id": None, "history": []}
+        
+    history = session_store.obtener_historial(conversation_id)
+    return {"conversation_id": conversation_id, "history": history}
 
 @app.get("/", response_class=HTMLResponse)
 def get_home():
