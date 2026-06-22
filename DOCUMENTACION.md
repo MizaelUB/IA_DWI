@@ -66,7 +66,8 @@ Procesa las preguntas del usuario evaluando herramientas de forma síncrona y de
   "question": "Muestra los datos de la mascota llamada Firulais",
   "model": "llama3.2:3b",
   "veterinary_id": 1,
-  "conversation_id": "opcional-uuid-de-sesion"
+  "conversation_id": "opcional-uuid-de-sesion",
+  "user_id": 1
 }
 ```
 - **Respuesta Exitosa (JSON):**
