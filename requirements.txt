@@ -17,3 +17,9 @@ chromadb==1.5.9
 PyMuPDF==1.27.2.3
 langchain-text-splitters==1.1.2
 langchain-core==1.4.0
+
+# Transcripción de voz (Speech-to-Text)
+faster-whisper==1.1.1
+
+# Upload de archivos (multipart)
+python-multipart==0.0.20

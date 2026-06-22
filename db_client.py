@@ -87,7 +87,8 @@ def buscar_citas_por_mascota(nombre_mascota: str, veterinary_id: int = None) -> 
             a.notes,
             v.name as veterinaria_nombre,
             a.pickup_requested,
-            a.pickup_status
+            a.pickup_status,
+            a.pet_id
         FROM appointments a
         LEFT JOIN veterinary v ON a.veterinary_id = v.id
         WHERE (a.pet_name ILIKE %s OR a.pet_id IN (SELECT id FROM pets WHERE name ILIKE %s))
@@ -116,7 +117,8 @@ def buscar_citas_por_mascota(nombre_mascota: str, veterinary_id: int = None) -> 
                         "notas": row[6] if row[6] else "",
                         "veterinaria": row[7] if row[7] else "Desconocida",
                         "recoleccion_solicitada": bool(row[8]),
-                        "recoleccion_estado": row[9] if row[9] else "No aplica"
+                        "recoleccion_estado": row[9] if row[9] else "No aplica",
+                        "pet_id": row[10]
                     })
                 return {"status": "success", "found": True, "data": citas}
     except Exception as e:
@@ -271,36 +273,74 @@ def ver_resenas_veterinaria(nombre_veterinaria: str = None, veterinary_id: int =
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-def ver_citas_por_fecha(fecha_inicio: str, fecha_fin: str = None, veterinary_id: int = None) -> dict:
+def ver_citas_por_fecha(fecha_inicio: str = None, fecha_fin: str = None, veterinary_id: int = None, rango_futuro: bool = False, estado: str = None) -> dict:
     """
-    Obtiene las citas agendadas para una fecha o rango de fechas específico,
-    opcionalmente filtrado por el ID de la clínica veterinaria.
+    Obtiene las citas agendadas para una fecha, rango de fechas, o citas futuras/pendientes desde hoy.
     """
-    if not fecha_fin:
-        fecha_fin = fecha_inicio
+    import datetime
+    si_no_se_dieron_fechas = not fecha_inicio and not fecha_fin
+
+    if not fecha_inicio:
+        fecha_inicio = str(datetime.date.today())
         
-    query = """
-        SELECT 
-            a.id,
-            a.pet_name,
-            a.appointment_date,
-            a.hour,
-            a.status,
-            a.total_cost,
-            a.notes,
-            v.name as veterinaria_nombre,
-            a.pickup_requested,
-            a.pickup_status
-        FROM appointments a
-        LEFT JOIN veterinary v ON a.veterinary_id = v.id
-        WHERE a.appointment_date BETWEEN %s::date AND %s::date
-          AND (%s::integer IS NULL OR a.veterinary_id = %s)
-        ORDER BY a.appointment_date ASC, a.hour ASC;
-    """
+    if si_no_se_dieron_fechas:
+        rango_futuro = False
+        fecha_fin = str(datetime.date.today() + datetime.timedelta(days=30))
+
+    if rango_futuro:
+        query = """
+            SELECT 
+                a.id,
+                a.pet_name,
+                a.appointment_date,
+                a.hour,
+                a.status,
+                a.total_cost,
+                a.notes,
+                v.name as veterinaria_nombre,
+                a.pickup_requested,
+                a.pickup_status,
+                a.pet_id
+            FROM appointments a
+            LEFT JOIN veterinary v ON a.veterinary_id = v.id
+            WHERE a.appointment_date >= %s::date
+              AND (%s::integer IS NULL OR a.veterinary_id = %s)
+              AND (%s IS NULL OR a.status ILIKE %s)
+            ORDER BY a.appointment_date ASC, a.hour ASC;
+        """
+    else:
+        if not fecha_fin:
+            if si_no_se_dieron_fechas:
+                fecha_fin = str(datetime.date.today() + datetime.timedelta(days=30))
+            else:
+                fecha_fin = fecha_inicio
+        query = """
+            SELECT 
+                a.id,
+                a.pet_name,
+                a.appointment_date,
+                a.hour,
+                a.status,
+                a.total_cost,
+                a.notes,
+                v.name as veterinaria_nombre,
+                a.pickup_requested,
+                a.pickup_status,
+                a.pet_id
+            FROM appointments a
+            LEFT JOIN veterinary v ON a.veterinary_id = v.id
+            WHERE a.appointment_date BETWEEN %s::date AND %s::date
+              AND (%s::integer IS NULL OR a.veterinary_id = %s)
+              AND (%s IS NULL OR a.status ILIKE %s)
+            ORDER BY a.appointment_date ASC, a.hour ASC;
+        """
     try:
         with get_connection() as conn:
             with conn.cursor() as cur:
-                cur.execute(query, (fecha_inicio, fecha_fin, veterinary_id, veterinary_id))
+                if rango_futuro:
+                    cur.execute(query, (fecha_inicio, veterinary_id, veterinary_id, estado, estado))
+                else:
+                    cur.execute(query, (fecha_inicio, fecha_fin, veterinary_id, veterinary_id, estado, estado))
                 rows = cur.fetchall()
                 
                 if not rows:
@@ -318,7 +358,8 @@ def ver_citas_por_fecha(fecha_inicio: str, fecha_fin: str = None, veterinary_id:
                         "notas": row[6] if row[6] else "",
                         "veterinaria": row[7] if row[7] else "Desconocida",
                         "recoleccion_solicitada": bool(row[8]),
-                        "recoleccion_estado": row[9] if row[9] else "No aplica"
+                        "recoleccion_estado": row[9] if row[9] else "No aplica",
+                        "pet_id": row[10]
                     })
                 return {"status": "success", "found": True, "data": citas}
     except Exception as e:
@@ -373,4 +414,72 @@ def buscar_mascota_por_nombre(nombre_mascota: str = None, veterinary_id: int = N
                 return {"status": "success", "found": True, "data": mascotas}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+def actualizar_estado_cita(appointment_id: int, nuevo_estado: str, motivo_cancelacion: str = None, veterinary_id: int = None) -> dict:
+    query = """
+        UPDATE appointments
+        SET status = %s,
+            cancellation_reason = %s,
+            cancelled_at = CASE WHEN %s = 'Cancelada' THEN CURRENT_TIMESTAMP ELSE cancelled_at END,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = %s AND (%s::integer IS NULL OR veterinary_id = %s);
+    """
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (nuevo_estado, motivo_cancelacion, nuevo_estado, appointment_id, veterinary_id, veterinary_id))
+                conn.commit()
+                if cur.rowcount == 0:
+                    return {"status": "success", "updated": False, "message": "No se encontró la cita o no pertenece a esta clínica."}
+                return {"status": "success", "updated": True, "message": f"Cita {appointment_id} actualizada a estado: {nuevo_estado}."}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+def confirmar_o_rechazar_cita(appointment_id: int, accion: str, motivo: str = None, veterinary_id: int = None) -> dict:
+    nuevo_estado = "Confirmada" if accion.lower() == "confirmar" else "Cancelada"
+    return actualizar_estado_cita(appointment_id=appointment_id, nuevo_estado=nuevo_estado, motivo_cancelacion=motivo, veterinary_id=veterinary_id)
+
+def buscar_dueno_mascota(pet_id: int = None, nombre_mascota: str = None, veterinary_id: int = None) -> dict:
+    query = """
+        SELECT DISTINCT
+            u.id as dueno_id,
+            u.name as dueno_nombre,
+            u.phone_number as dueno_telefono,
+            u.email as dueno_email,
+            p.id as mascota_id,
+            p.name as mascota_nombre,
+            p.specie as mascota_especie,
+            p.breed as mascota_raza
+        FROM pets p
+        JOIN users_app u ON p.user_id = u.id
+        LEFT JOIN appointments a ON p.id = a.pet_id
+        WHERE (%s::integer IS NULL OR p.id = %s)
+          AND (%s IS NULL OR p.name ILIKE %s)
+          AND (%s::integer IS NULL OR a.veterinary_id = %s);
+    """
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                name_param = f"%{nombre_mascota}%" if nombre_mascota else None
+                cur.execute(query, (pet_id, pet_id, name_param, name_param, veterinary_id, veterinary_id))
+                rows = cur.fetchall()
+                if not rows:
+                    return {"status": "success", "found": False, "data": []}
+                
+                owners = []
+                for row in rows:
+                    owners.append({
+                        "dueno_id": row[0],
+                        "dueno_nombre": row[1],
+                        "dueno_telefono": row[2],
+                        "dueno_email": row[3],
+                        "mascota_id": row[4],
+                        "mascota_nombre": row[5],
+                        "mascota_especie": row[6],
+                        "mascota_raza": row[7] if row[7] else "No especificada"
+                    })
+                return {"status": "success", "found": True, "data": owners}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 

@@ -219,6 +219,33 @@ app.get('/api/veterinarians/:id/appointments', async (req, res) => {
   }
 });
 
+// Endpoint: Actualizar el estado de una cita
+app.patch('/api/appointments/:id/status', async (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body;
+  
+  if (!status) {
+    return res.status(400).json({ status: 'error', message: 'El campo status es obligatorio.' });
+  }
+
+  try {
+    const query = `
+      UPDATE appointments 
+      SET status = $1, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $2
+      RETURNING id;
+    `;
+    const { rows } = await pool.query(query, [status, id]);
+    if (rows.length === 0) {
+      return res.status(404).json({ status: 'error', message: 'Cita no encontrada.' });
+    }
+    res.json({ status: 'success', message: `Estado de la cita ${id} actualizado a ${status}.` });
+  } catch (error) {
+    console.error(`Error updating status for appointment ${id}:`, error);
+    res.status(500).json({ status: 'error', message: error.message });
+  }
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Servidor escuchando en http://localhost:${PORT}`);

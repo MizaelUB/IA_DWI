@@ -5,20 +5,54 @@ import requests
 import json
 import datetime
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List
+from fastapi import UploadFile, File
 import re
+import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from recuperacion import cargar_base_vectorial, extraer_palabras_clave, es_seccion_query, tiene_coincidencia_palabras, normalizar_texto, obtener_conceptos_relacionados
 import db_client
-import uuid
 import session_store
+from guardrails import middleware_guardrails
+from voice import transcribir_audio, voice_status
 
 app = FastAPI(title="Swingtails RAG Sandbox API")
+
+# Middleware CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Middleware de guardrails contra inyección de prompts
+app.middleware("http")(middleware_guardrails)
+
 coleccion = None
 NUM_CTX = 16384
+
+# Mapeo de herramientas a labels legibles para el frontend
+TOOL_LABELS = {
+    "buscar_mascota_por_nombre": "Buscando expedientes de la mascota...",
+    "buscar_mascotas_por_dueno": "Buscando mascotas del dueño...",
+    "buscar_citas_por_mascota": "Consultando citas de la mascota...",
+    "buscar_veterinarias_por_ciudad_o_nombre": "Buscando veterinarias...",
+    "ver_servicios_y_productos_veterinaria": "Consultando servicios y productos...",
+    "ver_resenas_veterinaria": "Consultando reseñas de la veterinaria...",
+    "ver_citas_por_fecha": "Consultando citas por fecha...",
+    "consultar_manuales_y_procesos_generales": "Consultando manuales y procesos...",
+    "actualizar_estado_cita": "Actualizando estado de la cita...",
+    "buscar_dueno_mascota": "Buscando dueño de la mascota...",
+    "confirmar_o_rechazar_cita": "Confirmando o rechazando la cita...",
+}
+
+
 def calentar_modelo_ollama(modelo: str = "llama3.2:3b"):
     """Fuerza a Ollama a cargar el modelo en memoria al iniciar el servidor."""
     print(f"Calentando modelo {modelo} en memoria...")
@@ -99,16 +133,245 @@ def parsear_fecha(fecha_str: str, año_defecto: int) -> str:
     return fecha_str
 
 
-@app.post("/api/chat")
-def api_chat(req: ChatRequest):
-    global coleccion
-    if coleccion is None:
-        raise HTTPException(status_code=500, detail="La base vectorial de pruebas no está cargada.")
-        
-    inicio_total = time.time()
-    pregunta_original = req.question
-    modelo_llm = req.model
-    
+# ============================================================
+# Herramientas de Function Calling (definición)
+# ============================================================
+DB_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "buscar_mascota_por_nombre",
+            "description": "Usa ESTA herramienta ÚNICAMENTE cuando el usuario da el nombre de la MASCOTA (el animal). NO la uses si el nombre parece ser de una persona o cliente.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "nombre_mascota": {
+                        "type": "string",
+                        "description": "El nombre del animal/mascota."
+                    },
+                    "pet_id": {
+                        "type": "integer",
+                        "description": "El ID único de la mascota (opcional)."
+                    }
+                },
+                "required": ["nombre_mascota"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "consultar_manuales_y_procesos_generales",
+            "description": "Consulta el manual de marca, mercadotecnia o procesos de Swingtails en la base de conocimientos general (RAG/vectorial) cuando no se trate de una consulta directa a la base de datos de la veterinaria.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pregunta": {
+                        "type": "string",
+                        "description": "La pregunta o tema a buscar en los manuales de Swingtails."
+                    }
+                },
+                "required": ["pregunta"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "buscar_mascotas_por_dueno",
+            "description": "Usa ESTA herramienta ÚNICAMENTE cuando el usuario proporciona el nombre del DUEÑO, HUMANO o CLIENTE para saber qué mascotas tiene registradas.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "nombre_dueno": {
+                        "type": "string",
+                        "description": "El nombre completo o parcial de la persona (el dueño)."
+                    }
+                },
+                "required": ["nombre_dueno"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "buscar_citas_por_mascota",
+            "description": "Obtiene el historial y próximas citas de una mascota por su nombre.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "nombre_mascota": {
+                        "type": "string",
+                        "description": "El nombre de la mascota."
+                    }
+                },
+                "required": ["nombre_mascota"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "buscar_veterinarias_por_ciudad_o_nombre",
+            "description": "Busca veterinarias registradas y activas por ciudad y/o por nombre de clínica.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "ciudad": {
+                        "type": "string",
+                        "description": "La ciudad en la que buscar veterinarias (opcional)."
+                    },
+                    "nombre": {
+                        "type": "string",
+                        "description": "El nombre de la veterinaria (opcional)."
+                    }
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ver_servicios_y_productos_veterinaria",
+            "description": "Obtiene la lista completa de servicios y productos ofrecidos por una veterinaria específica.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "nombre_veterinaria": {
+                        "type": "string",
+                        "description": "El nombre de la veterinaria."
+                    }
+                },
+                "required": ["nombre_veterinaria"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ver_resenas_veterinaria",
+            "description": "Obtiene las opiniones y calificaciones de los clientes sobre una veterinaria específica.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "nombre_veterinaria": {
+                        "type": "string",
+                        "description": "El nombre de la veterinaria."
+                    }
+                },
+                "required": ["nombre_veterinaria"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ver_citas_por_fecha",
+            "description": "Obtiene las citas agendadas para una fecha, rango de fechas, o citas futuras/pendientes a partir de hoy.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "fecha_inicio": {
+                        "type": "string",
+                        "description": "La fecha de inicio en formato YYYY-MM-DD. Opcional (si no se especifica se asume el día de hoy)."
+                    },
+                    "fecha_fin": {
+                        "type": "string",
+                        "description": "La fecha de fin en formato YYYY-MM-DD para un rango cerrado (opcional)."
+                    },
+                    "rango_futuro": {
+                        "type": "boolean",
+                        "description": "Si es True, busca todas las citas a partir de la fecha_inicio en adelante (útil para 'próximas citas' o 'citas futuras')."
+                    },
+                    "estado": {
+                        "type": "string",
+                        "description": "Filtra las citas por su estado actual (ej. 'Pendiente', 'Confirmada', 'Completada', 'Cancelada')."
+                    }
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "actualizar_estado_cita",
+            "description": "Confirma o cancela una cita específica mediante su ID único. Si el estado es 'Cancelada', se puede incluir un motivo de cancelación.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "appointment_id": {
+                        "type": "integer",
+                        "description": "El ID de la cita a confirmar o cancelar."
+                    },
+                    "nuevo_estado": {
+                        "type": "string",
+                        "enum": ["Confirmada", "Cancelada"],
+                        "description": "El nuevo estado de la cita."
+                    },
+                    "motivo_cancelacion": {
+                        "type": "string",
+                        "description": "El motivo por el cual se cancela la cita (opcional)."
+                    }
+                },
+                "required": ["appointment_id", "nuevo_estado"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "confirmar_o_rechazar_cita",
+            "description": "Confirma o rechaza una cita médica específica según su ID único.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "appointment_id": {
+                        "type": "integer",
+                        "description": "El ID de la cita a confirmar o rechazar."
+                    },
+                    "accion": {
+                        "type": "string",
+                        "enum": ["confirmar", "rechazar"],
+                        "description": "La acción a realizar sobre la cita."
+                    },
+                    "motivo": {
+                        "type": "string",
+                        "description": "El motivo por el cual se rechaza/cancela la cita (opcional, solo si la acción es rechazar)."
+                    }
+                },
+                "required": ["appointment_id", "accion"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "buscar_dueno_mascota",
+            "description": "Busca la información del dueño de una mascota específica usando el pet_id o su nombre.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pet_id": {
+                        "type": "integer",
+                        "description": "El ID de la mascota cuyo dueño se desea buscar (preferido si se conoce)."
+                    },
+                    "nombre_mascota": {
+                        "type": "string",
+                        "description": "El nombre de la mascota para buscar a su dueño."
+                    }
+                }
+            }
+        }
+    }
+]
+
+
+# ============================================================
+# Funciones auxiliares reutilizables
+# ============================================================
+
+def resolver_sesion(req: ChatRequest) -> tuple:
+    """Resuelve conversation_id y gestiona el historial de sesión."""
     conversation_id = req.conversation_id
     user_id = req.user_id or 1
     
@@ -122,167 +385,82 @@ def api_chat(req: ChatRequest):
     if vet_id_sesion is not None:
         req.veterinary_id = vet_id_sesion
 
-    nombre_vet_activo = None
-    if req.veterinary_id is not None:
-        try:
-            res_vet = db_client.buscar_veterinarias_por_ciudad_o_nombre(veterinary_id=req.veterinary_id)
-            if res_vet.get("status") == "success" and res_vet.get("found") and res_vet.get("data"):
-                nombre_vet_activo = res_vet["data"][0]["nombre"]
-                print(f"[DEBUG] Veterinaria activa seleccionada por ID {req.veterinary_id}: {nombre_vet_activo}")
-        except Exception as e:
-            print(f"Error al buscar nombre de veterinaria activa: {e}")
-        
-    # Definición de herramientas para Function Calling
-    db_tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "buscar_mascota_por_nombre",
-                "description": "Usa ESTA herramienta ÚNICAMENTE cuando el usuario da el nombre de la MASCOTA (el animal). NO la uses si el nombre parece ser de una persona o cliente.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "nombre_mascota": {
-                            "type": "string",
-                            "description": "El nombre del animal/mascota."
-                        },
-                        "pet_id": {
-                            "type": "integer",
-                            "description": "El ID único de la mascota (opcional)."
-                        }
-                    },
-                    "required": ["nombre_mascota"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "consultar_manuales_y_procesos_generales",
-                "description": "Consulta el manual de marca, mercadotecnia o procesos de Swingtails en la base de conocimientos general (RAG/vectorial) cuando no se trate de una consulta directa a la base de datos de la veterinaria.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "pregunta": {
-                            "type": "string",
-                            "description": "La pregunta o tema a buscar en los manuales de Swingtails."
-                        }
-                    },
-                    "required": ["pregunta"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "buscar_mascotas_por_dueno",
-                "description": "Usa ESTA herramienta ÚNICAMENTE cuando el usuario proporciona el nombre del DUEÑO, HUMANO o CLIENTE para saber qué mascotas tiene registradas.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "nombre_dueno": {
-                            "type": "string",
-                            "description": "El nombre completo o parcial de la persona (el dueño)."
-                        }
-                    },
-                    "required": ["nombre_dueno"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "buscar_citas_por_mascota",
-                "description": "Obtiene el historial y próximas citas de una mascota por su nombre.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "nombre_mascota": {
-                            "type": "string",
-                            "description": "El nombre de la mascota."
-                        }
-                    },
-                    "required": ["nombre_mascota"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "buscar_veterinarias_por_ciudad_o_nombre",
-                "description": "Busca veterinarias registradas y activas por ciudad y/o por nombre de clínica.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "ciudad": {
-                            "type": "string",
-                            "description": "La ciudad en la que buscar veterinarias (opcional)."
-                        },
-                        "nombre": {
-                            "type": "string",
-                            "description": "El nombre de la veterinaria (opcional)."
-                        }
-                    }
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "ver_servicios_y_productos_veterinaria",
-                "description": "Obtiene la lista completa de servicios y productos ofrecidos por una veterinaria específica.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "nombre_veterinaria": {
-                            "type": "string",
-                            "description": "El nombre de la veterinaria."
-                        }
-                    },
-                    "required": ["nombre_veterinaria"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "ver_resenas_veterinaria",
-                "description": "Obtiene las opiniones y calificaciones de los clientes sobre una veterinaria específica.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "nombre_veterinaria": {
-                            "type": "string",
-                            "description": "El nombre de la veterinaria."
-                        }
-                    },
-                    "required": ["nombre_veterinaria"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "ver_citas_por_fecha",
-                "description": "Obtiene las citas agendadas para una fecha o rango de fechas específico. Obligatorio usar formato YYYY-MM-DD.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "fecha_inicio": {
-                            "type": "string",
-                            "description": "La fecha de inicio de consulta ESTRICTAMENTE en formato YYYY-MM-DD (ej. 2026-05-14)."
-                        },
-                        "fecha_fin": {
-                            "type": "string",
-                            "description": "La fecha de fin ESTRICTAMENTE en formato YYYY-MM-DD para un rango (opcional)."
-                        }
-                    },
-                    "required": ["fecha_inicio"]
-                }
-            }
-        }
-    ]
+    return conversation_id, user_id
 
+
+def obtener_nombre_veterinaria(veterinary_id: int | None) -> str | None:
+    """Obtiene el nombre de la veterinaria activa por ID."""
+    if veterinary_id is None:
+        return None
+    try:
+        res_vet = db_client.buscar_veterinarias_por_ciudad_o_nombre(veterinary_id=veterinary_id)
+        if res_vet.get("status") == "success" and res_vet.get("found") and res_vet.get("data"):
+            nombre = res_vet["data"][0]["nombre"]
+            print(f"[DEBUG] Veterinaria activa seleccionada por ID {veterinary_id}: {nombre}")
+            return nombre
+    except Exception as e:
+        print(f"Error al buscar nombre de veterinaria activa: {e}")
+    return None
+
+
+def construir_historial(req: ChatRequest, conversation_id: str, user_id: int,
+                        prompt_herramientas: str) -> tuple:
+    """Construye el historial de mensajes y retorna (history, messages_with_history, limit)."""
+    history = session_store.obtener_historial(conversation_id)
+    if not history:
+        session_store.guardar_mensaje(conversation_id, "system", prompt_herramientas, req.veterinary_id, user_id)
+        session_store.guardar_mensaje(conversation_id, "user", req.question, req.veterinary_id, user_id)
+        history = [
+            {"role": "system", "content": prompt_herramientas},
+            {"role": "user", "content": req.question}
+        ]
+    else:
+        session_store.guardar_mensaje(conversation_id, "user", req.question, req.veterinary_id, user_id)
+        history.append({"role": "user", "content": req.question})
+        
+    limit = 5 if req.is_follow_up else 10
+    messages_with_history = history[-limit:] if len(history) > limit else history
+    if not messages_with_history or messages_with_history[0]["role"] != "system":
+        messages_with_history = [{"role": "system", "content": prompt_herramientas}] + messages_with_history
+    else:
+        messages_with_history = [{"role": "system", "content": prompt_herramientas}] + messages_with_history[1:]
+
+    return history, messages_with_history, limit
+
+
+def construir_prompt_herramientas(nombre_vet: str, fecha_actual: str) -> str:
+    return f"""Eres el asistente virtual de la clínica veterinaria '{nombre_vet or "Swingtails"}'. Swingtails es una plataforma de gestión de citas veterinarias.
+La fecha de hoy es {fecha_actual}.
+
+REGLAS DE SELECCIÓN DE HERRAMIENTAS:
+1. Si la pregunta es sobre la estrategia de mercadotecnia, logo, marca, manuales o procesos generales, llama a 'consultar_manuales_y_procesos_generales'.
+2. Si el usuario busca un ANIMAL y te da su nombre, llama a 'buscar_mascota_por_nombre'.
+3. Si el usuario busca a una PERSONA/CLIENTE para ver sus mascotas, llama a 'buscar_mascotas_por_dueno'.
+4. Si en la pregunta se indica explícitamente un ID numérico de mascota, pásalo en 'pet_id'.
+5. Si la pregunta requiere buscar citas por fecha, formatea los argumentos 'fecha_inicio' y 'fecha_fin' ESTRICTAMENTE en YYYY-MM-DD.
+6. IMPORTANTE: Puedes calcular fechas relativas (como 'hoy', 'mañana', 'próximo lunes') basándote en la fecha de hoy {fecha_actual} para rellenar los argumentos de fecha.
+7. REGLA CRÍTICA DE FORMATO: Al llenar los argumentos de las herramientas, SIEMPRE usa los valores reales de texto o número. NUNCA devuelvas diccionarios internos con las palabras 'description' o 'type'."""
+
+
+def construir_prompt_final(nombre_vet: str, db_context_str: str) -> str:
+    return f"""Eres el asistente virtual de la clínica veterinaria '{nombre_vet or "Swingtails"}' dirigido a médicos veterinarios, administradores y clientes. Swingtails es una plataforma de gestión de citas veterinarias. Tu única fuente de verdad para esta respuesta es la INFORMACIÓN OBTENIDA abajo.
+            
+INFORMACIÓN OBTENIDA DE LA CLÍNICA:
+{db_context_str}
+
+INSTRUCCIONES DE RESPUESTA:
+1. Responde a la pregunta del usuario de manera clara, estructurada, amable y profesional usando ÚNICAMENTE la INFORMACIÓN OBTENIDA.
+2. Como eres el asistente de la clínica '{nombre_vet or "Swingtails"}', saluda e interactúa en su nombre.
+3. Si la información indica que no se encontraron datos o está vacía, menciónalo de manera educada y clara.
+4. NUNCA uses frases como "Según la información de la base de datos", "De acuerdo al contexto" o similares.
+5. No uses tu conocimiento general.
+6. Organiza la información en listas o tablas Markdown para facilitar su lectura.
+7. Si el resultado de buscar mascotas contiene múltiples mascotas con el mismo nombre y el usuario no especificó el parámetro 'pet_id', debes listar todas las mascotas encontradas (con sus respectivos IDs, especie, raza y dueño) y preguntarle explícitamente al usuario que te indique el ID de la mascota específica.
+"""
+
+
+def detectar_y_ejecutar_tools(tool_calls_detected, pregunta_original, req, año_actual, coleccion):
+    """Detecta herramientas, las ejecuta y retorna (context_chunks, contiene_rag)."""
     tool_mappers = {
         "buscar_mascota_por_nombre": db_client.buscar_mascota_por_nombre,
         "buscar_mascotas_por_dueno": db_client.buscar_mascotas_por_dueno,
@@ -291,48 +469,110 @@ def api_chat(req: ChatRequest):
         "ver_servicios_y_productos_veterinaria": db_client.ver_servicios_y_productos_veterinaria,
         "ver_resenas_veterinaria": db_client.ver_resenas_veterinaria,
         "ver_citas_por_fecha": db_client.ver_citas_por_fecha,
+        "actualizar_estado_cita": db_client.actualizar_estado_cita,
+        "buscar_dueno_mascota": db_client.buscar_dueno_mascota,
+        "confirmar_o_rechazar_cita": db_client.confirmar_o_rechazar_cita,
     }
+    
+    context_chunks = []
+    contiene_rag = False
+    
+    for tc in tool_calls_detected:
+        func_name = tc["function"]["name"]
+        func_args = tc["function"]["arguments"]
+        
+        if func_name == "consultar_manuales_y_procesos_generales":
+            contiene_rag = True
+            pregunta_rag = func_args.get("pregunta", pregunta_original)
+            pregunta_optimizada = extraer_palabras_clave(pregunta_rag)
+            query_texts = [pregunta_rag, pregunta_optimizada]
+            conceptos_generados = []
+            
+            if req.autonomous_search:
+                modelo_conceptos = req.model if req.concept_model == req.__fields__["concept_model"].default else req.concept_model
+                conceptos_generados = obtener_conceptos_relacionados(pregunta_rag, req.history, modelo_conceptos)
+                if conceptos_generados:
+                    query_texts.extend(conceptos_generados)
+                    
+            n = 15 if es_seccion_query(pregunta_rag) else 12
+            try:
+                resultados = coleccion.query(
+                    query_texts=query_texts,
+                    n_results=n,
+                    include=["documents", "distances", "metadatas"]
+                )
+                docs_unicos = []
+                for i in range(len(resultados['documents'])): 
+                    for j, doc in enumerate(resultados['documents'][i]):
+                        dist = resultados['distances'][i][j]
+                        meta = resultados['metadatas'][i][j]
+                        tema = meta.get("tema", "Sin Tema")
+                        archivo = meta.get("archivo", "Desconocido")
+                        
+                        if doc not in docs_unicos:
+                            docs_unicos.append(doc)
+                            context_chunks.append({
+                                "text": doc,
+                                "distance": float(dist),
+                                "theme": tema,
+                                "source": archivo,
+                                "type": "vectorial"
+                            })
+            except Exception as err:
+                print(f"Error en consulta RAG interna: {err}")
+                
+        elif func_name in tool_mappers:
+            if func_name == "buscar_mascota_por_nombre":
+                nombre_mascota = func_args.get("nombre_mascota")
+                if isinstance(nombre_mascota, str) and nombre_mascota.strip().startswith("{"):
+                    try:
+                        import json as json_mod
+                        parsed = json_mod.loads(nombre_mascota)
+                        if "pet_id" in parsed and parsed["pet_id"]:
+                            func_args["pet_id"] = int(parsed["pet_id"])
+                        if "nombre_mascota" in parsed:
+                            func_args["nombre_mascota"] = parsed["nombre_mascota"]
+                        elif "nombre" in parsed:
+                            func_args["nombre_mascota"] = parsed["nombre"]
+                    except Exception as parse_err:
+                        print(f"Error al parsear JSON malformado en nombre_mascota: {parse_err}")
+                
+                if not func_args.get("pet_id"):
+                    match_id = re.search(r'\b(?:id|ID|identificador)\s*[:=]?\s*(\d+)\b', pregunta_original)
+                    if match_id:
+                        func_args["pet_id"] = int(match_id.group(1))
 
+            if func_name == "ver_citas_por_fecha":
+                if "fecha_inicio" in func_args and func_args["fecha_inicio"]:
+                    func_args["fecha_inicio"] = parsear_fecha(func_args["fecha_inicio"], año_actual)
+                if "fecha_fin" in func_args and func_args["fecha_fin"]:
+                    func_args["fecha_fin"] = parsear_fecha(func_args["fecha_fin"], año_actual)
+
+            try:
+                result = tool_mappers[func_name](**func_args, veterinary_id=req.veterinary_id)
+            except Exception as err:
+                result = {"status": "error", "message": str(err)}
+            
+            result_str = json.dumps(result, indent=2, ensure_ascii=False)
+            context_chunks.append({
+                "text": f"Resultado de {func_name} con argumentos {json.dumps(func_args)}:\n{result_str}",
+                "distance": 0.0,
+                "theme": f"Consulta BD ({func_name})",
+                "source": "PostgreSQL (Supabase)",
+                "type": "database"
+            })
+    
+    return context_chunks, contiene_rag
+
+
+def detectar_tools_en_ollama(messages_with_history, modelo_llm, pregunta_original, coleccion):
+    """Llama a Ollama para detectar tool calls. Retorna lista de tool_calls detectados."""
     url = "http://localhost:11434/api/chat"
     
-    año_actual = datetime.date.today().year
-    prompt_herramientas = f"""Eres el asistente virtual de la clínica veterinaria '{nombre_vet_activo or "Swingtails"}'. Swingtails es una plataforma de gestión de citas veterinarias.
-El año actual es {año_actual}.
-
-REGLAS DE SELECCIÓN DE HERRAMIENTAS:
-1. Si la pregunta es sobre la estrategia de mercadotecnia, logo, marca, manuales o procesos generales, llama a 'consultar_manuales_y_procesos_generales'.
-2. Si el usuario busca un ANIMAL y te da su nombre, llama a 'buscar_mascota_por_nombre'.
-3. Si el usuario busca a una PERSONA/CLIENTE para ver sus mascotas, llama a 'buscar_mascotas_por_dueno'.
-4. Si en la pregunta se indica explícitamente un ID numérico de mascota, pásalo en 'pet_id'.
-5. Si la pregunta requiere buscar citas por fecha, formatea los argumentos 'fecha_inicio' y 'fecha_fin' ESTRICTAMENTE en YYYY-MM-DD.
-6. IMPORTANTE: Como solo conoces el año {año_actual}, si el usuario usa términos relativos ('mañana', 'hoy') sin dar fecha exacta, PÍDELE amablemente el día y mes exacto.
-7. REGLA CRÍTICA DE FORMATO: Al llenar los argumentos de las herramientas, SIEMPRE usa los valores reales de texto o número. NUNCA devuelvas diccionarios internos con las palabras 'description' o 'type'."""
-    history = session_store.obtener_historial(conversation_id)
-    if not history:
-        session_store.guardar_mensaje(conversation_id, "system", prompt_herramientas, req.veterinary_id, user_id)
-        session_store.guardar_mensaje(conversation_id, "user", pregunta_original, req.veterinary_id, user_id)
-        history = [
-            {"role": "system", "content": prompt_herramientas},
-            {"role": "user", "content": pregunta_original}
-        ]
-    else:
-        session_store.guardar_mensaje(conversation_id, "user", pregunta_original, req.veterinary_id, user_id)
-        history.append({"role": "user", "content": pregunta_original})
-        
-    # Si es seguimiento, tomamos los últimos 5, si no (chat recién abierto/primera consulta), tomamos 10
-    limit = 5 if req.is_follow_up else 10
-    messages_with_history = history[-limit:] if len(history) > limit else history
-    if not messages_with_history or messages_with_history[0]["role"] != "system":
-        messages_with_history = [{"role": "system", "content": prompt_herramientas}] + messages_with_history
-    else:
-        messages_with_history = [{"role": "system", "content": prompt_herramientas}] + messages_with_history[1:]
-
-     
-
     payload_tools = {
         "model": modelo_llm,
         "messages": messages_with_history,
-        "tools": db_tools,
+        "tools": DB_TOOLS,
         "stream": False,
         "keep_alive": -1,
         "options": {
@@ -341,7 +581,6 @@ REGLAS DE SELECCIÓN DE HERRAMIENTAS:
     }
 
     tool_calls_detected = []
-    inicio_herramientas = time.time()
     try:
         res_tools = requests.post(url, json=payload_tools, timeout=45)
         if res_tools.status_code == 200:
@@ -362,119 +601,68 @@ REGLAS DE SELECCIÓN DE HERRAMIENTAS:
                 }
             })
 
+    return tool_calls_detected
+
+
+def generar_respuesta_ollama(messages_final, modelo_llm):
+    """Genera una respuesta completa (sin streaming) desde Ollama."""
+    url = "http://localhost:11434/api/chat"
+    payload_final = {
+        "model": modelo_llm,
+        "messages": messages_final,
+        "stream": False,
+        "keep_alive": -1,
+        "options": {
+            "num_ctx": NUM_CTX
+        }
+    }
+    
+    try:
+        res_final = requests.post(url, json=payload_final, timeout=90)
+        if res_final.status_code == 200:
+            return res_final.json()['message']['content']
+        else:
+            return f"Error al generar respuesta final (HTTP {res_final.status_code})"
+    except Exception as e:
+        return f"Falla de conexión al generar respuesta final con Ollama: {e}"
+
+
+# ============================================================
+# Endpoint original /api/chat (sin streaming)
+# ============================================================
+@app.post("/api/chat")
+def api_chat(req: ChatRequest):
+    global coleccion
+    if coleccion is None:
+        raise HTTPException(status_code=500, detail="La base vectorial de pruebas no está cargada.")
+        
+    inicio_total = time.time()
+    pregunta_original = req.question
+    modelo_llm = req.model
+    conversation_id, user_id = resolver_sesion(req)
+    nombre_vet_activo = obtener_nombre_veterinaria(req.veterinary_id)
+
+    fecha_actual = str(datetime.date.today())
+    año_actual = datetime.date.today().year
+    prompt_herramientas = construir_prompt_herramientas(nombre_vet_activo, fecha_actual)
+    
+    history, messages_with_history, limit = construir_historial(
+        req, conversation_id, user_id, prompt_herramientas
+    )
+
+    inicio_herramientas = time.time()
+    tool_calls_detected = detectar_tools_en_ollama(messages_with_history, modelo_llm, pregunta_original, coleccion)
+
     if tool_calls_detected:
         print(f"✔ Herramientas detectadas por Ollama: {tool_calls_detected}")
-        context_chunks = []
-        contiene_rag = False
-        
-        for tc in tool_calls_detected:
-            func_name = tc["function"]["name"]
-            func_args = tc["function"]["arguments"]
-            
-            if func_name == "consultar_manuales_y_procesos_generales":
-                contiene_rag = True
-                pregunta_rag = func_args.get("pregunta", pregunta_original)
-                pregunta_optimizada = extraer_palabras_clave(pregunta_rag)
-                query_texts = [pregunta_rag, pregunta_optimizada]
-                conceptos_generados = []
-                
-                if req.autonomous_search:
-                    modelo_conceptos = modelo_llm if req.concept_model == req.__fields__["concept_model"].default else req.concept_model
-                    conceptos_generados = obtener_conceptos_relacionados(pregunta_rag, req.history, modelo_conceptos)
-                    if conceptos_generados:
-                        query_texts.extend(conceptos_generados)
-                        
-                n = 15 if es_seccion_query(pregunta_rag) else 12
-                try:
-                    resultados = coleccion.query(
-                        query_texts=query_texts,
-                        n_results=n,
-                        include=["documents", "distances", "metadatas"]
-                    )
-                    docs_unicos = []
-                    for i in range(len(resultados['documents'])): 
-                        for j, doc in enumerate(resultados['documents'][i]):
-                            dist = resultados['distances'][i][j]
-                            meta = resultados['metadatas'][i][j]
-                            tema = meta.get("tema", "Sin Tema")
-                            archivo = meta.get("archivo", "Desconocido")
-                            
-                            if doc not in docs_unicos:
-                                docs_unicos.append(doc)
-                                context_chunks.append({
-                                    "text": doc,
-                                    "distance": float(dist),
-                                    "theme": tema,
-                                    "source": archivo,
-                                    "type": "vectorial"
-                                })
-                except Exception as err:
-                    print(f"Error en consulta RAG interna: {err}")
-                    
-            elif func_name in tool_mappers:
-                if func_name == "buscar_mascota_por_nombre":
-                    nombre_mascota = func_args.get("nombre_mascota")
-                    # Si Ollama serializó un JSON en el string
-                    if isinstance(nombre_mascota, str) and nombre_mascota.strip().startswith("{"):
-                        try:
-                            import json as json_mod
-                            parsed = json_mod.loads(nombre_mascota)
-                            if "pet_id" in parsed and parsed["pet_id"]:
-                                func_args["pet_id"] = int(parsed["pet_id"])
-                            if "nombre_mascota" in parsed:
-                                func_args["nombre_mascota"] = parsed["nombre_mascota"]
-                            elif "nombre" in parsed:
-                                func_args["nombre_mascota"] = parsed["nombre"]
-                        except Exception as parse_err:
-                            print(f"Error al parsear JSON malformado en nombre_mascota: {parse_err}")
-                    
-                    # Extracción defensiva del ID del texto de la pregunta
-                    if not func_args.get("pet_id"):
-                        match_id = re.search(r'\b(?:id|ID|identificador)\s*[:=]?\s*(\d+)\b', pregunta_original)
-                        if match_id:
-                            func_args["pet_id"] = int(match_id.group(1))
-
-                # ---------------- BLOQUE DE PARSEO DE FECHAS ----------------
-                if func_name == "ver_citas_por_fecha":
-                    if "fecha_inicio" in func_args and func_args["fecha_inicio"]:
-                        func_args["fecha_inicio"] = parsear_fecha(func_args["fecha_inicio"], año_actual)
-                    if "fecha_fin" in func_args and func_args["fecha_fin"]:
-                        func_args["fecha_fin"] = parsear_fecha(func_args["fecha_fin"], año_actual)
-                # ------------------------------------------------------------
-
-                start_db = time.time()
-                try:
-                    # Ejecutar la consulta en Supabase pasando el veterinary_id
-                    result = tool_mappers[func_name](**func_args, veterinary_id=req.veterinary_id)
-                except Exception as err:
-                    result = {"status": "error", "message": str(err)}
-                
-                result_str = json.dumps(result, indent=2, ensure_ascii=False)
-                context_chunks.append({
-                    "text": f"Resultado de {func_name} con argumentos {json.dumps(func_args)}:\n{result_str}",
-                    "distance": 0.0,
-                    "theme": f"Consulta BD ({func_name})",
-                    "source": "PostgreSQL (Supabase)",
-                    "type": "database"
-                })
+        context_chunks, contiene_rag = detectar_y_ejecutar_tools(
+            tool_calls_detected, pregunta_original, req, año_actual, coleccion
+        )
         
         if context_chunks:
             db_context_str = "\n\n".join([c["text"] for c in context_chunks])
+            prompt_sistema_final = construir_prompt_final(nombre_vet_activo, db_context_str)
             
-            prompt_sistema_final = f"""Eres el asistente virtual de la clínica veterinaria '{nombre_vet_activo or "Swingtails"}' dirigido a médicos veterinarios, administradores y clientes. Swingtails es una plataforma de gestión de citas veterinarias. Tu única fuente de verdad para esta respuesta es la INFORMACIÓN OBTENIDA abajo.
-            
-INFORMACIÓN OBTENIDA DE LA CLÍNICA:
-{db_context_str}
-
-INSTRUCCIONES DE RESPUESTA:
-1. Responde a la pregunta del usuario de manera clara, estructurada, amable y profesional usando ÚNICAMENTE la INFORMACIÓN OBTENIDA.
-2. Como eres el asistente de la clínica '{nombre_vet_activo or "Swingtails"}', saluda e interactúa en su nombre.
-3. Si la información indica que no se encontraron datos o está vacía, menciónalo de manera educada y clara.
-4. NUNCA uses frases como "Según la información de la base de datos", "De acuerdo al contexto" o similares.
-5. No uses tu conocimiento general.
-6. Organiza la información en listas o tablas Markdown para facilitar su lectura.
-7. Si el resultado de buscar mascotas contiene múltiples mascotas con el mismo nombre y el usuario no especificó el parámetro 'pet_id', debes listar todas las mascotas encontradas (con sus respectivos IDs, especie, raza y dueño) y preguntarle explícitamente al usuario que te indique el ID de la mascota específica.
-"""
             inicio_llm = time.time()
             messages_final = history[-limit:] if len(history) > limit else history
             if not messages_final or messages_final[0]["role"] != "system":
@@ -482,24 +670,7 @@ INSTRUCCIONES DE RESPUESTA:
             else:
                 messages_final = [{"role": "system", "content": prompt_sistema_final}] + messages_final[1:]
 
-            payload_final = {
-                "model": modelo_llm,
-                "messages": messages_final,
-                "stream": False,
-                "keep_alive": -1,
-                "options": {
-                    "num_ctx": NUM_CTX
-                }
-            }
-            
-            try:
-                res_final = requests.post(url, json=payload_final, timeout=90)
-                if res_final.status_code == 200:
-                    answer = res_final.json()['message']['content']
-                else:
-                    answer = f"Error al generar respuesta final (HTTP {res_final.status_code})"
-            except Exception as e:
-                answer = f"Falla de conexión al generar respuesta final con Ollama: {e}"
+            answer = generar_respuesta_ollama(messages_final, modelo_llm)
                 
             session_store.guardar_mensaje(conversation_id, "assistant", answer, req.veterinary_id, user_id)
                 
@@ -540,6 +711,166 @@ INSTRUCCIONES DE RESPUESTA:
         }
     }
 
+
+# ============================================================
+# Endpoint con Streaming SSE /api/chat/stream
+# ============================================================
+@app.post("/api/chat/stream")
+def api_chat_stream(req: ChatRequest):
+    global coleccion
+    if coleccion is None:
+        raise HTTPException(status_code=500, detail="La base vectorial de pruebas no está cargada.")
+        
+    inicio_total = time.time()
+    pregunta_original = req.question
+    modelo_llm = req.model
+    conversation_id, user_id = resolver_sesion(req)
+    nombre_vet_activo = obtener_nombre_veterinaria(req.veterinary_id)
+
+    fecha_actual = str(datetime.date.today())
+    año_actual = datetime.date.today().year
+    prompt_herramientas = construir_prompt_herramientas(nombre_vet_activo, fecha_actual)
+    
+    history, messages_with_history, limit = construir_historial(
+        req, conversation_id, user_id, prompt_herramientas
+    )
+
+    inicio_herramientas = time.time()
+    tool_calls_detected = detectar_tools_en_ollama(messages_with_history, modelo_llm, pregunta_original, coleccion)
+
+    context_chunks = []
+    contiene_rag = False
+    prompt_sistema_final = None
+
+    if tool_calls_detected:
+        print(f"✔ Herramientas detectadas por Ollama: {tool_calls_detected}")
+        context_chunks, contiene_rag = detectar_y_ejecutar_tools(
+            tool_calls_detected, pregunta_original, req, año_actual, coleccion
+        )
+        
+        if context_chunks:
+            db_context_str = "\n\n".join([c["text"] for c in context_chunks])
+            prompt_sistema_final = construir_prompt_final(nombre_vet_activo, db_context_str)
+
+    def event_stream():
+        """Generador de eventos SSE."""
+        fin_herramientas = time.time()
+        
+        # 1. Enviar eventos de herramientas detectadas
+        for tc in tool_calls_detected:
+            func_name = tc["function"]["name"]
+            label = TOOL_LABELS.get(func_name, f"Ejecutando {func_name}...")
+            yield f"event: tool_start\ndata: {json.dumps({'tool': func_name, 'label': label})}\n\n"
+        
+        # 2. Si no hay contexto suficiente, enviar fallback
+        if not prompt_sistema_final:
+            answer_fallback = "No pude identificar la información solicitada ni una herramienta adecuada para buscarla. ¿Podrías ser más específico o reformular tu pregunta?"
+            session_store.guardar_mensaje(conversation_id, "assistant", answer_fallback, req.veterinary_id, user_id)
+            yield f"event: error\ndata: {json.dumps({'message': answer_fallback})}\n\n"
+            yield f"event: done\ndata: {json.dumps({'conversation_id': conversation_id, 'context': [], 'search_mode': 'none', 'concepts': [], 'metrics': {'retrieval_time_ms': int((fin_herramientas - inicio_herramientas) * 1000), 'llm_time_ms': 0, 'total_time_ms': int((fin_herramientas - inicio_total) * 1000), 'chunks_retrieved': 0, 'lexical_matches_count': 0, 'average_distance': 0.0}})}\n\n"
+            return
+
+        # 3. Construir mensajes finales
+        messages_final = history[-limit:] if len(history) > limit else history
+        if not messages_final or messages_final[0]["role"] != "system":
+            messages_final = [{"role": "system", "content": prompt_sistema_final}] + messages_final
+        else:
+            messages_final = [{"role": "system", "content": prompt_sistema_final}] + messages_final[1:]
+
+        # 4. Streaming desde Ollama
+        url = "http://localhost:11434/api/chat"
+        payload_final = {
+            "model": modelo_llm,
+            "messages": messages_final,
+            "stream": True,
+            "keep_alive": -1,
+            "options": {
+                "num_ctx": NUM_CTX
+            }
+        }
+
+        inicio_llm = time.time()
+        respuesta_completa = ""
+        
+        try:
+            with requests.post(url, json=payload_final, timeout=120, stream=True) as res:
+                if res.status_code != 200:
+                    error_msg = f"Error al generar respuesta (HTTP {res.status_code})"
+                    session_store.guardar_mensaje(conversation_id, "assistant", error_msg, req.veterinary_id, user_id)
+                    yield f"event: error\ndata: {json.dumps({'message': error_msg})}\n\n"
+                    return
+                
+                for line in res.iter_lines():
+                    if not line:
+                        continue
+                    try:
+                        chunk = json.loads(line)
+                        if "message" in chunk and "content" in chunk["message"]:
+                            token = chunk["message"]["content"]
+                            respuesta_completa += token
+                            # Enviar token como evento SSE
+                            yield f"event: token\ndata: {json.dumps({'token': token})}\n\n"
+                        
+                        if chunk.get("done", False):
+                            break
+                    except json.JSONDecodeError:
+                        continue
+                        
+        except Exception as e:
+            error_msg = f"Falla de conexión al generar respuesta con Ollama: {e}"
+            session_store.guardar_mensaje(conversation_id, "assistant", error_msg, req.veterinary_id, user_id)
+            yield f"event: error\ndata: {json.dumps({'message': error_msg})}\n\n"
+            return
+
+        # 5. Guardar respuesta completa en la sesión
+        if respuesta_completa:
+            session_store.guardar_mensaje(conversation_id, "assistant", respuesta_completa, req.veterinary_id, user_id)
+        
+        fin_total = time.time()
+        
+        # 6. Enviar evento done con métricas y contexto
+        done_data = {
+            "conversation_id": conversation_id,
+            "context": context_chunks,
+            "search_mode": "rag" if contiene_rag else "database",
+            "concepts": [],
+            "metrics": {
+                "retrieval_time_ms": int((fin_herramientas - inicio_herramientas) * 1000),
+                "llm_time_ms": int((fin_total - inicio_llm) * 1000),
+                "total_time_ms": int((fin_total - inicio_total) * 1000),
+                "chunks_retrieved": len(context_chunks),
+                "lexical_matches_count": 0,
+                "average_distance": 0.0
+            }
+        }
+        yield f"event: done\ndata: {json.dumps(done_data)}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        }
+    )
+
+
+# ============================================================
+# Endpoint de transcripción de voz
+# ============================================================
+@app.post("/api/voice/transcribe")
+async def api_voice_transcribe(audio: UploadFile = File(...)):
+    """Recibe un archivo de audio y retorna la transcripción usando Whisper local."""
+    return await transcribir_audio(audio)
+
+
+@app.get("/api/voice/status")
+def api_voice_status():
+    """Diagnóstico: indica si Whisper está disponible o si se usa Web Speech API como fallback."""
+    return voice_status()
+
+
 @app.get("/api/chat/history")
 def get_chat_history(conversation_id: str | None = None, veterinary_id: int | None = None, user_id: int | None = None):
     user_id = user_id or 1
@@ -551,6 +882,18 @@ def get_chat_history(conversation_id: str | None = None, veterinary_id: int | No
         
     history = session_store.obtener_historial(conversation_id)
     return {"conversation_id": conversation_id, "history": history}
+
+@app.delete("/api/chat/history")
+def delete_chat_history(conversation_id: str | None = None, veterinary_id: int | None = None, user_id: int | None = None):
+    if conversation_id:
+        session_store.eliminar_historial(conversation_id)
+        return {"status": "success", "message": "History deleted for conversation"}
+    elif veterinary_id is not None:
+        user_id = user_id or 1
+        session_store.eliminar_historial_por_sesion(veterinary_id, user_id)
+        return {"status": "success", "message": "History deleted for active session"}
+    else:
+        raise HTTPException(status_code=400, detail="Must provide conversation_id or veterinary_id")
 
 @app.get("/", response_class=HTMLResponse)
 def get_home():

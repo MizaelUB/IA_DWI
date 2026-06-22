@@ -777,6 +777,120 @@
             transform: translateY(-1px);
         }
 
+        /* Tool Indicator */
+        .tool-indicator {
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            padding: 0.6rem 1rem;
+            background: rgba(200, 167, 150, 0.12);
+            border: 1px solid rgba(200, 167, 150, 0.25);
+            border-radius: 10px;
+            animation: fadeInMessage 0.3s ease forwards;
+            align-self: flex-start;
+            max-width: 80%;
+        }
+
+        .tool-spinner {
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(105, 63, 54, 0.2);
+            border-top-color: var(--secondary);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            flex-shrink: 0;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .tool-label {
+            font-size: 0.85rem;
+            color: var(--secondary);
+            font-weight: 500;
+            font-style: italic;
+        }
+
+        /* Streaming cursor */
+        .streaming-cursor {
+            display: inline-block;
+            width: 2px;
+            height: 1em;
+            background-color: var(--secondary);
+            margin-left: 2px;
+            vertical-align: text-bottom;
+            animation: blink 0.7s step-end infinite;
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
+
+        .streaming-bubble {
+            min-height: 1.2em;
+        }
+
+        /* Mic Button */
+        .mic-btn {
+            background: transparent;
+            border: none;
+            padding: 0.6rem 0.8rem;
+            cursor: pointer;
+            color: var(--text-muted);
+            font-size: 1.2rem;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 6px;
+            position: relative;
+        }
+
+        .mic-btn:hover {
+            color: var(--secondary);
+            background: rgba(105, 63, 54, 0.08);
+        }
+
+        .mic-btn.recording {
+            color: #ef4444;
+            animation: pulseMic 1.2s ease-in-out infinite;
+            background: rgba(239, 68, 68, 0.08);
+        }
+
+        .mic-btn.recording .mic-icon::after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            border: 2px solid rgba(239, 68, 68, 0.4);
+            animation: pulseRing 1.2s ease-out infinite;
+        }
+
+        @keyframes pulseMic {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.08); }
+        }
+
+        @keyframes pulseRing {
+            0% { transform: translate(-50%, -50%) scale(0.8); opacity: 1; }
+            100% { transform: translate(-50%, -50%) scale(1.5); opacity: 0; }
+        }
+
+        .mic-btn.processing {
+            color: var(--primary);
+            pointer-events: none;
+        }
+
+        .mic-btn.processing .mic-icon {
+            animation: spin 1s linear infinite;
+        }
+
         /* Responsive Design */
         @media (max-width: 900px) {
             main {
@@ -879,6 +993,9 @@
                     <input type="text" id="userInput" class="chat-input"
                         placeholder="Pregunta sobre Swingtails (ej. ¿Que es Swingtails?)..." autocomplete="off"
                         required>
+                    <button type="button" class="mic-btn" id="micBtn" title="Grabar audio (mantener presionado)">
+                        <span class="mic-icon">🎤</span>
+                    </button>
                     <button type="submit" class="send-btn" id="sendBtn">
                         <span>Enviar</span>
                     </button>
@@ -948,7 +1065,6 @@
         const toggleInspectorBtn = document.getElementById('toggleInspectorBtn');
         const mainElement = document.querySelector('main');
 
-        // Check if there is a saved preference, otherwise default to hidden
         const inspectorHidden = localStorage.getItem('inspectorHidden') !== 'false';
         if (inspectorHidden) {
             mainElement.classList.add('hide-inspector');
@@ -963,22 +1079,17 @@
             toggleInspectorBtn.textContent = isHidden ? 'Mostrar Inspector' : 'Ocultar Inspector';
             localStorage.setItem('inspectorHidden', isHidden);
         });
+
         const conceptsCard = document.getElementById('conceptsCard');
         const metricConcepts = document.getElementById('metricConcepts');
-
-        // Métricas
         const metricTotal = document.getElementById('metricTotal');
         const metricChroma = document.getElementById('metricChroma');
         const metricLlm = document.getElementById('metricLlm');
         const metricChunks = document.getElementById('metricChunks');
         const metricSearchType = document.getElementById('metricSearchType');
-
-        // Indicadores visuales
         const indTotal = document.getElementById('indTotal');
         const indChroma = document.getElementById('indChroma');
         const indLlm = document.getElementById('indLlm');
-
-        // Contexto
         const contextList = document.getElementById('contextList');
         const contextPlaceholder = document.getElementById('contextPlaceholder');
 
@@ -986,6 +1097,7 @@
         let currentConversationId = null;
         let isFollowUp = false;
         const conversationIdDisplay = document.getElementById('conversationIdDisplay');
+        let currentAbortController = null;
 
         function updateConversationId(id) {
             currentConversationId = id;
@@ -998,8 +1110,30 @@
             }
         }
 
-        // Limpiar el chat
-        clearBtn.addEventListener('click', () => {
+        clearBtn.addEventListener('click', async () => {
+            if (currentAbortController) {
+                currentAbortController.abort();
+                currentAbortController = null;
+            }
+
+            const vetIdVal = document.getElementById('veterinaryIdInput').value.trim();
+            const veterinaryId = vetIdVal ? parseInt(vetIdVal) : null;
+            const userIdVal = document.getElementById('userIdInput').value.trim();
+            const userId = userIdVal ? parseInt(userIdVal) : 1;
+
+            let deleteUrl = '/api/chat/history';
+            if (currentConversationId) {
+                deleteUrl += `?conversation_id=${encodeURIComponent(currentConversationId)}`;
+            } else if (veterinaryId !== null) {
+                deleteUrl += `?veterinary_id=${veterinaryId}&user_id=${userId}`;
+            }
+
+            try {
+                await fetch(deleteUrl, { method: 'DELETE' });
+            } catch (err) {
+                console.error("Error al eliminar historial:", err);
+            }
+
             chatMessages.innerHTML = '';
             chatMessages.appendChild(emptyChatState);
             emptyChatState.style.display = 'flex';
@@ -1011,11 +1145,9 @@
             isFollowUp = false;
         });
 
-        // Resetear conversación al cambiar de veterinaria/usuario y cargar su historial activo
         async function loadActiveSessionHistory() {
             const vetIdVal = document.getElementById('veterinaryIdInput').value.trim();
             const veterinaryId = vetIdVal ? parseInt(vetIdVal) : null;
-            
             const userIdVal = document.getElementById('userIdInput').value.trim();
             const userId = userIdVal ? parseInt(userIdVal) : 1;
             
@@ -1068,42 +1200,40 @@
             metricConcepts.innerHTML = 'N/A';
         }
 
-        // Form Submit
+        // ============================================================
+        // Form Submit con Streaming SSE
+        // ============================================================
         chatForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             const text = userInput.value.trim();
             if (!text) return;
 
-            // Ocultar pantalla de bienvenida
             if (emptyChatState) {
                 emptyChatState.style.display = 'none';
             }
 
-            // Agregar mensaje de usuario
             appendMessage('user', text);
             userInput.value = '';
             userInput.focus();
 
-            // Agregar bubble de carga del bot
-            const loadingMsgId = appendLoadingMessage();
-
-            // Deshabilitar envío mientras procesa
             sendBtn.disabled = true;
+            currentAbortController = new AbortController();
 
             const vetIdVal = document.getElementById('veterinaryIdInput').value.trim();
             const veterinaryId = vetIdVal ? parseInt(vetIdVal) : null;
-            
             const userIdVal = document.getElementById('userIdInput').value.trim();
             const userId = userIdVal ? parseInt(userIdVal) : 1;
 
+            // Crear el contenedor de la respuesta del bot (streaming)
+            const streamMsgId = appendStreamingMessage();
+
             try {
-                const response = await fetch('/api/chat', {
+                const response = await fetch('/api/chat/stream', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         question: text,
                         model: modelSelect.value,
-                        // Se utiliza el mismo modelo principal para evitar intercambios en VRAM
                         concept_model: modelSelect.value,
                         limit_chunks: parseInt(limitChunksSelect.value),
                         history: chatHistory,
@@ -1112,39 +1242,170 @@
                         conversation_id: currentConversationId,
                         is_follow_up: isFollowUp,
                         user_id: userId
-                    })
+                    }),
+                    signal: currentAbortController.signal
                 });
 
                 if (!response.ok) {
-                    throw new Error('Error en el servidor API');
+                    // El middleware de guardrails retorna 400 o 403
+                    if (response.status === 400 || response.status === 403) {
+                        const errData = await response.json().catch(() => ({}));
+                        removeStreamingMessage(streamMsgId);
+                        const errMsg = errData.response || errData.error || 'No puedo procesar esta solicitud.';
+                        appendMessage('assistant', errMsg);
+                        if (errData.score) {
+                            console.warn(`[Guardrails] Bloqueado - score: ${errData.score}, razones: ${(errData.reasons || []).join(', ')}`);
+                        }
+                        return;
+                    }
+                    throw new Error(`Error en el servidor (${response.status})`);
                 }
 
-                const data = await response.json();
+                // Consumir SSE stream
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                let answerAccumulado = '';
 
-                // Remover burbuja de carga e insertar respuesta real
-                removeLoadingMessage(loadingMsgId);
-                appendMessage('assistant', data.answer);
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
 
-                // Guardar en historial
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop(); // Guardar línea incompleta
+
+                    let currentEvent = '';
+                    for (const line of lines) {
+                        if (line.startsWith('event: ')) {
+                            currentEvent = line.slice(7).trim();
+                        } else if (line.startsWith('data: ')) {
+                            const jsonStr = line.slice(6).trim();
+                            if (!jsonStr || !currentEvent) continue;
+                            
+                            try {
+                                const data = JSON.parse(jsonStr);
+                                
+                                if (currentEvent === 'tool_start') {
+                                    showToolIndicator(data.label);
+                                } else if (currentEvent === 'token') {
+                                    answerAccumulado += data.token;
+                                    updateStreamBubble(streamMsgId, answerAccumulado);
+                                } else if (currentEvent === 'done') {
+                                    // Renderizar markdown final en el bubble
+                                    finalizeStreamBubble(streamMsgId, answerAccumulado);
+                                    updateConversationId(data.conversation_id);
+                                    isFollowUp = true;
+                                    updateInspector(data);
+                                } else if (currentEvent === 'error') {
+                                    removeStreamingMessage(streamMsgId);
+                                    appendMessage('assistant', data.message);
+                                }
+                            } catch (parseErr) {
+                                // Ignorar errores de parseo de líneas individuales
+                            }
+                            currentEvent = '';
+                        }
+                    }
+                }
+
+                // Guardar en historial local
                 chatHistory.push({ role: 'user', content: text });
-                chatHistory.push({ role: 'assistant', content: data.answer });
-                
-                // Actualizar conversation_id
-                updateConversationId(data.conversation_id);
-                isFollowUp = true;
-
-                // Actualizar métricas e inspector
-                updateInspector(data);
+                if (answerAccumulado) {
+                    chatHistory.push({ role: 'assistant', content: answerAccumulado });
+                }
 
             } catch (err) {
-                console.error(err);
-                removeLoadingMessage(loadingMsgId);
-                appendMessage('assistant', `⚠️ Ocurrió un error al procesar tu solicitud: ${err.message}`);
+                if (err.name === 'AbortError') {
+                    removeStreamingMessage(streamMsgId);
+                    appendMessage('assistant', 'Solicitud cancelada.');
+                } else {
+                    console.error(err);
+                    removeStreamingMessage(streamMsgId);
+                    appendMessage('assistant', `Ocurrió un error al procesar tu solicitud: ${err.message}`);
+                }
             } finally {
                 sendBtn.disabled = false;
+                currentAbortController = null;
+                hideToolIndicators();
             }
         });
 
+        // ============================================================
+        // Indicadores de herramientas
+        // ============================================================
+        function showToolIndicator(label) {
+            hideToolIndicators();
+            const indicator = document.createElement('div');
+            indicator.className = 'tool-indicator';
+            indicator.id = 'activeToolIndicator';
+            indicator.innerHTML = `
+                <div class="tool-spinner"></div>
+                <span class="tool-label">${escapeHTML(label)}</span>
+            `;
+            chatMessages.appendChild(indicator);
+            scrollToBottom();
+        }
+
+        function hideToolIndicators() {
+            const existing = document.getElementById('activeToolIndicator');
+            if (existing) existing.remove();
+        }
+
+        // ============================================================
+        // Streaming message (typewriter effect)
+        // ============================================================
+        function appendStreamingMessage() {
+            const msgId = 'stream-' + Date.now();
+            const msgDiv = document.createElement('div');
+            msgDiv.className = 'message assistant';
+            msgDiv.id = msgId;
+
+            const senderLabel = document.createElement('span');
+            senderLabel.className = 'message-sender';
+            senderLabel.textContent = 'Swingtails AI';
+
+            const bubble = document.createElement('div');
+            bubble.className = 'message-bubble streaming-bubble';
+            bubble.innerHTML = '<span class="streaming-cursor"></span>';
+
+            msgDiv.appendChild(senderLabel);
+            msgDiv.appendChild(bubble);
+            chatMessages.appendChild(msgDiv);
+            scrollToBottom();
+            return msgId;
+        }
+
+        function updateStreamBubble(msgId, text) {
+            const msgDiv = document.getElementById(msgId);
+            if (!msgDiv) return;
+            const bubble = msgDiv.querySelector('.streaming-bubble');
+            if (!bubble) return;
+            // Mostrar texto plano durante streaming para evitar parpadeo de markdown
+            bubble.textContent = text;
+            bubble.innerHTML += '<span class="streaming-cursor"></span>';
+            scrollToBottom();
+        }
+
+        function finalizeStreamBubble(msgId, text) {
+            const msgDiv = document.getElementById(msgId);
+            if (!msgDiv) return;
+            const bubble = msgDiv.querySelector('.streaming-bubble');
+            if (!bubble) return;
+            bubble.classList.remove('streaming-bubble');
+            // Renderizar markdown final
+            bubble.innerHTML = marked.parse(text);
+            scrollToBottom();
+        }
+
+        function removeStreamingMessage(id) {
+            const el = document.getElementById(id);
+            if (el) el.remove();
+        }
+
+        // ============================================================
+        // Append message (no-streaming, para historial y errores)
+        // ============================================================
         function appendMessage(sender, text) {
             const msgDiv = document.createElement('div');
             msgDiv.className = `message ${sender}`;
@@ -1157,7 +1418,6 @@
             bubble.className = 'message-bubble';
 
             if (sender === 'assistant') {
-                // Interpretar Markdown usando marked
                 bubble.innerHTML = marked.parse(text);
             } else {
                 bubble.textContent = text;
@@ -1165,7 +1425,6 @@
 
             msgDiv.appendChild(senderLabel);
             msgDiv.appendChild(bubble);
-
             chatMessages.appendChild(msgDiv);
             scrollToBottom();
         }
@@ -1203,17 +1462,17 @@
 
         function removeLoadingMessage(id) {
             const loadingMsg = document.getElementById(id);
-            if (loadingMsg) {
-                loadingMsg.remove();
-            }
+            if (loadingMsg) loadingMsg.remove();
         }
 
         function scrollToBottom() {
             chatMessages.scrollTop = chatMessages.scrollHeight;
         }
 
+        // ============================================================
+        // Inspector panel
+        // ============================================================
         function updateInspector(data) {
-            // Conceptos relacionados generados
             if (data.concepts && data.concepts.length > 0) {
                 conceptsCard.style.display = 'flex';
                 metricConcepts.innerHTML = data.concepts.map(c => `<span class="concept-tag">${escapeHTML(c)}</span>`).join('');
@@ -1223,8 +1482,6 @@
             }
 
             const m = data.metrics;
-
-            // Actualizar valores de métricas
             const totalS = (m.total_time_ms / 1000).toFixed(2);
             const llmS = (m.llm_time_ms / 1000).toFixed(2);
 
@@ -1233,7 +1490,6 @@
             metricLlm.innerHTML = `${llmS}<span class="metric-unit">s</span>`;
             metricChunks.innerHTML = `${m.chunks_retrieved} <span class="metric-unit">chunks</span>`;
 
-            // Tipo de búsqueda
             if (data.search_mode === 'database') {
                 metricSearchType.innerHTML = `<span style="color: #a855f7; font-weight: bold;">Consulta BD (Function Calling)</span>`;
             } else if (m.chunks_retrieved === 0) {
@@ -1245,7 +1501,6 @@
                 `;
             }
 
-            // Animar barras indicadoras (normalizadas contra máximos empíricos aproximados)
             const pctTotal = Math.min((m.total_time_ms / 8000) * 100, 100);
             const pctChroma = Math.min((m.retrieval_time_ms / 200) * 100, 100);
             const pctLlm = Math.min((m.llm_time_ms / 7000) * 100, 100);
@@ -1254,13 +1509,12 @@
             indChroma.style.width = `${pctChroma}%`;
             indLlm.style.width = `${pctLlm}%`;
 
-            // Actualizar lista de contexto
             contextList.innerHTML = '';
 
             if (!data.context || data.context.length === 0) {
                 contextList.innerHTML = `
                     <div class="context-placeholder" style="color: #f87171; border-color: rgba(239, 68, 68, 0.25); background: rgba(239, 68, 68, 0.05);">
-                        ⚠️ No se recuperaron fragmentos del contexto. El modelo respondió con su prompt estricto predeterminado.
+                        No se recuperaron fragmentos del contexto. El modelo respondió con su prompt estricto predeterminado.
                     </div>
                 `;
                 return;
@@ -1282,7 +1536,6 @@
                     fileType = isPdf ? 'PDF' : 'MD';
                 }
 
-                // Distance format
                 let distText = '';
                 let distClass = '';
                 if (chunk.type === 'database') {
@@ -1316,6 +1569,102 @@
                 .replace(/"/g, "&quot;")
                 .replace(/'/g, "&#039;");
         }
+
+        // ============================================================
+        // Voice: Mic Button + Backend Whisper + Web Speech API Fallback
+        // ============================================================
+        const micBtn = document.getElementById('micBtn');
+        let isRecording = false;
+        let webSpeechRecognition = null;
+
+        micBtn.addEventListener('click', () => {
+            if (isRecording) {
+                stopRecording();
+            } else {
+                startRecording();
+            }
+        });
+
+        function startRecording() {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            
+            if (!SpeechRecognition) {
+                alert('Tu navegador no soporta reconocimiento de voz nativo. Usa Google Chrome o Microsoft Edge.');
+                return;
+            }
+
+            webSpeechRecognition = new SpeechRecognition();
+            webSpeechRecognition.lang = 'es-MX';
+            webSpeechRecognition.interimResults = true;
+            webSpeechRecognition.continuous = false; // Detiene la grabación automáticamente al detectar silencio
+            webSpeechRecognition.maxAlternatives = 1;
+
+            isRecording = true;
+            micBtn.classList.add('recording');
+            micBtn.title = 'Escuchando... habla y detente para enviar automáticamente';
+            userInput.placeholder = 'Escuchando tu voz...';
+
+            let finalTranscript = '';
+
+            webSpeechRecognition.onresult = (event) => {
+                let interimTranscript = '';
+                for (let i = event.resultIndex; i < event.results.length; i++) {
+                    const transcript = event.results[i][0].transcript;
+                    if (event.results[i].isFinal) {
+                        finalTranscript += transcript + ' ';
+                        userInput.value = finalTranscript.trim();
+                    } else {
+                        interimTranscript += transcript;
+                        userInput.value = (finalTranscript + interimTranscript).trim();
+                    }
+                }
+            };
+
+            webSpeechRecognition.onend = () => {
+                isRecording = false;
+                webSpeechRecognition = null;
+                resetMicState();
+                
+                if (finalTranscript.trim()) {
+                    userInput.value = finalTranscript.trim();
+                    userInput.focus();
+                    chatForm.requestSubmit();
+                }
+            };
+
+            webSpeechRecognition.onerror = (event) => {
+                console.error('Web Speech API error:', event.error);
+                if (event.error === 'not-allowed') {
+                    alert('Permiso de micrófono denegado. Permite el acceso al micrófono en tu navegador.');
+                }
+                resetMicState();
+                webSpeechRecognition = null;
+            };
+
+            webSpeechRecognition.start();
+        }
+
+        function stopRecording() {
+            if (webSpeechRecognition) {
+                webSpeechRecognition.stop();
+            }
+            isRecording = false;
+            resetMicState();
+        }
+
+        function resetMicState() {
+            isRecording = false;
+            micBtn.classList.remove('recording', 'processing');
+            micBtn.title = 'Grabar audio (clic para iniciar)';
+            userInput.placeholder = 'Pregunta sobre Swingtails (ej. ¿Que es Swingtails?)...';
+        }
+
+        // Diagnóstico del motor de voz al cargar la página
+        function checkVoiceStatus() {
+            micBtn.title = 'Grabar audio (STT Nativo del Navegador)';
+            console.log('[Voice] Configurado para usar STT nativo del navegador.');
+        }
+        window.addEventListener('DOMContentLoaded', checkVoiceStatus);
     </script>
 </body>
 

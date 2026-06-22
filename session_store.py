@@ -81,3 +81,16 @@ def obtener_conversacion_activa(veterinary_id: int, user_id: int) -> str | None:
         )
         row = cursor.fetchone()
         return row["conversation_id"] if row else None
+
+def eliminar_historial(conversation_id: str):
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM chat_messages WHERE conversation_id = ?", (conversation_id,))
+        conn.commit()
+
+def eliminar_historial_por_sesion(veterinary_id: int, user_id: int):
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM chat_messages WHERE veterinary_id = ? AND user_id = ?", (veterinary_id, user_id))
+        conn.commit()
+

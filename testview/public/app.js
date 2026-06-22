@@ -5,7 +5,8 @@ const state = {
   selectedOwner: null,
   selectedPet: null,
   owners: [],
-  pets: []
+  pets: [],
+  appointments: []
 };
 
 // Referencias del DOM
@@ -66,7 +67,8 @@ const DOM = {
   // Listado de Citas
   appointmentsListContainer: document.getElementById('appointments-list-container'),
   btnRefreshAppointments: document.getElementById('btn-refresh-appointments'),
-  appointmentsTableBody: document.getElementById('appointments-table-body')
+  appointmentsTableBody: document.getElementById('appointments-table-body'),
+  hidePastAppointments: document.getElementById('hide-past-appointments')
 };
 
 // --- NAVEGACIÓN ---
@@ -481,8 +483,8 @@ async function loadAppointments() {
     const result = await response.json();
 
     if (response.ok && result.status === 'success') {
-      const appointments = result.data;
-      renderAppointments(appointments);
+      state.appointments = result.data;
+      renderAppointments(state.appointments);
     } else {
       DOM.appointmentsTableBody.innerHTML = `<tr><td colspan="9" class="table-placeholder" style="color: var(--error)">Error al cargar: ${result.message}</td></tr>`;
     }
@@ -494,13 +496,25 @@ async function loadAppointments() {
 
 // Renderizar las filas de citas
 function renderAppointments(list) {
-  if (list.length === 0) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  let filteredList = list;
+  if (DOM.hidePastAppointments && DOM.hidePastAppointments.checked) {
+    filteredList = list.filter(app => {
+      const [year, month, day] = app.appointment_date.split('T')[0].split('-').map(Number);
+      const appDate = new Date(year, month - 1, day);
+      return appDate >= today;
+    });
+  }
+
+  if (filteredList.length === 0) {
     DOM.appointmentsTableBody.innerHTML = '<tr><td colspan="9" class="table-placeholder">No hay citas agendadas en esta clínica.</td></tr>';
     return;
   }
 
   DOM.appointmentsTableBody.innerHTML = '';
-  list.forEach(app => {
+  filteredList.forEach(app => {
     const tr = document.createElement('tr');
 
     const formattedDate = new Date(app.appointment_date).toISOString().split('T')[0];
@@ -532,11 +546,38 @@ function renderAppointments(list) {
       <td style="font-size: 0.8rem; max-width: 200px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${app.notes || ''}">
         ${app.notes || '<span style="color: var(--text-muted)">Sin notas</span>'}
       </td>
+      <td>
+        <div style="display: flex; gap: 0.4rem;">
+          <button class="btn-action-confirm" onclick="updateAppointmentStatus(${app.id}, 'Confirmada')" title="Confirmar Cita" style="background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3); padding: 0.25rem 0.5rem; border-radius: 4px; cursor: pointer; font-size: 0.75rem; font-weight: 600; transition: all 0.2s;">✓</button>
+          <button class="btn-action-reject" onclick="updateAppointmentStatus(${app.id}, 'Cancelada')" title="Rechazar/Cancelar Cita" style="background: rgba(239, 68, 68, 0.15); color: #ef4444; border: 1px solid rgba(239, 68, 68, 0.3); padding: 0.25rem 0.5rem; border-radius: 4px; cursor: pointer; font-size: 0.75rem; font-weight: 600; transition: all 0.2s;">✗</button>
+        </div>
+      </td>
     `;
     
     DOM.appointmentsTableBody.appendChild(tr);
   });
 }
+
+window.updateAppointmentStatus = async (id, status) => {
+  try {
+    const response = await fetch(`/api/appointments/${id}/status`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ status })
+    });
+    const result = await response.json();
+    if (response.ok && result.status === 'success') {
+      loadAppointments();
+    } else {
+      alert(`Error al actualizar el estado: ${result.message}`);
+    }
+  } catch (error) {
+    console.error(error);
+    alert('Error al conectar con el servidor.');
+  }
+};
 
 
 // --- EVENT LISTENERS ---
@@ -604,6 +645,9 @@ function initEventListeners() {
   });
 
   DOM.btnRefreshAppointments.addEventListener('click', loadAppointments);
+  DOM.hidePastAppointments.addEventListener('change', () => {
+    renderAppointments(state.appointments);
+  });
 }
 
 // Iniciar aplicación
