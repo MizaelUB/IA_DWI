@@ -33,15 +33,22 @@ def inicializar_db():
         cursor.execute("DELETE FROM chat_messages WHERE role NOT IN ('user', 'assistant')")
         conn.commit()
 
-def obtener_historial(conversation_id: str) -> List[Dict[str, str]]:
+def obtener_historial(conversation_id: str, user_id: int | None = None) -> List[Dict[str, str]]:
     with sqlite3.connect(DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT role, content FROM chat_messages WHERE conversation_id = ? ORDER BY id ASC",
-            (conversation_id,)
-        )
+        if user_id is not None:
+            cursor.execute(
+                "SELECT role, content FROM chat_messages WHERE conversation_id = ? AND user_id = ? ORDER BY id ASC",
+                (conversation_id, user_id)
+            )
+        else:
+            cursor.execute(
+                "SELECT role, content FROM chat_messages WHERE conversation_id = ? ORDER BY id ASC",
+                (conversation_id,)
+            )
         return [{"role": row["role"], "content": row["content"]} for row in cursor.fetchall()]
+
 
 def guardar_mensaje(conversation_id: str, role: str, content: str, veterinary_id: int | None = None, user_id: int | None = None):
     if role not in ("user", "assistant"):
@@ -82,10 +89,13 @@ def obtener_conversacion_activa(veterinary_id: int, user_id: int) -> str | None:
         row = cursor.fetchone()
         return row["conversation_id"] if row else None
 
-def eliminar_historial(conversation_id: str):
+def eliminar_historial(conversation_id: str, user_id: int | None = None):
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM chat_messages WHERE conversation_id = ?", (conversation_id,))
+        if user_id is not None:
+            cursor.execute("DELETE FROM chat_messages WHERE conversation_id = ? AND user_id = ?", (conversation_id, user_id))
+        else:
+            cursor.execute("DELETE FROM chat_messages WHERE conversation_id = ?", (conversation_id,))
         conn.commit()
 
 def eliminar_historial_por_sesion(veterinary_id: int, user_id: int):

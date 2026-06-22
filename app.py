@@ -406,7 +406,7 @@ def obtener_nombre_veterinaria(veterinary_id: int | None) -> str | None:
 def construir_historial(req: ChatRequest, conversation_id: str, user_id: int,
                         prompt_herramientas: str) -> tuple:
     """Construye el historial de mensajes y retorna (history, messages_with_history, limit)."""
-    history = session_store.obtener_historial(conversation_id)
+    history = session_store.obtener_historial(conversation_id, user_id)
     if not history:
         session_store.guardar_mensaje(conversation_id, "system", prompt_herramientas, req.veterinary_id, user_id)
         session_store.guardar_mensaje(conversation_id, "user", req.question, req.veterinary_id, user_id)
@@ -880,16 +880,16 @@ def get_chat_history(conversation_id: str | None = None, veterinary_id: int | No
     if not conversation_id:
         return {"conversation_id": None, "history": []}
         
-    history = session_store.obtener_historial(conversation_id)
+    history = session_store.obtener_historial(conversation_id, user_id)
     return {"conversation_id": conversation_id, "history": history}
 
 @app.delete("/api/chat/history")
 def delete_chat_history(conversation_id: str | None = None, veterinary_id: int | None = None, user_id: int | None = None):
+    user_id = user_id or 1
     if conversation_id:
-        session_store.eliminar_historial(conversation_id)
+        session_store.eliminar_historial(conversation_id, user_id)
         return {"status": "success", "message": "History deleted for conversation"}
     elif veterinary_id is not None:
-        user_id = user_id or 1
         session_store.eliminar_historial_por_sesion(veterinary_id, user_id)
         return {"status": "success", "message": "History deleted for active session"}
     else:
