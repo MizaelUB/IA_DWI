@@ -71,37 +71,84 @@ def buscar_mascotas_por_dueno(nombre_dueno: str, veterinary_id: int = None) -> d
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-def buscar_citas_por_mascota(nombre_mascota: str, veterinary_id: int = None) -> dict:
+def buscar_citas_por_mascota(nombre_mascota: str, veterinary_id: int = None, incluir_pasadas: bool = False, pet_id: int = None) -> dict:
     """
-    Busca el historial y citas agendadas de una mascota por su nombre,
-    opcionalmente filtrado por el ID de la clínica veterinaria.
+    Busca citas de una mascota por su nombre o pet_id.
+    Si hay varias mascotas con el mismo nombre y no se dio pet_id, devuelve status: "multiple_found".
     """
-    query = """
-        SELECT 
-            a.id,
-            a.pet_name,
-            a.appointment_date,
-            a.hour,
-            a.status,
-            a.total_cost,
-            a.notes,
-            v.name as veterinaria_nombre,
-            a.pickup_requested,
-            a.pickup_status,
-            a.pet_id
-        FROM appointments a
-        LEFT JOIN veterinary v ON a.veterinary_id = v.id
-        WHERE (a.pet_name ILIKE %s OR a.pet_id IN (SELECT id FROM pets WHERE name ILIKE %s))
-          AND (%s::integer IS NULL OR a.veterinary_id = %s)
-        ORDER BY a.appointment_date DESC, a.hour DESC;
-    """
+    if isinstance(incluir_pasadas, str):
+        incluir_pasadas = incluir_pasadas.lower() in ("true", "1", "yes")
+    
+    # 1. Si no se proporciona pet_id, verificar si hay múltiples mascotas con ese nombre
+    if not pet_id:
+        check_query = """
+            SELECT DISTINCT p.id, p.name, p.specie, p.breed, u.name as dueno_nombre
+            FROM pets p
+            JOIN users_app u ON p.user_id = u.id
+            WHERE p.name ILIKE %s
+        """
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(check_query, (f"%{nombre_mascota}%",))
+                    pets = cur.fetchall()
+                    if len(pets) > 1:
+                        # Múltiples mascotas encontradas, retornar lista para que el LLM pregunte
+                        list_pets = []
+                        for p in pets:
+                            list_pets.append({
+                                "id": p[0],
+                                "nombre": p[1],
+                                "especie": p[2],
+                                "raza": p[3] if p[3] else "No especificada",
+                                "dueno": p[4]
+                            })
+                        return {
+                            "status": "multiple_found",
+                            "message": f"Se encontraron múltiples mascotas con el nombre '{nombre_mascota}'. Por favor especifica cuál indicando su ID.",
+                            "data": list_pets
+                        }
+                    elif len(pets) == 1:
+                        pet_id = pets[0][0]
+        except Exception as e:
+            # Si falla la validación previa, continuamos con la búsqueda tradicional
+            print(f"Error al validar mascotas duplicadas: {e}")
+
+    # 2. Construir la consulta principal
+    date_filter = "" if incluir_pasadas else "AND a.appointment_date >= CURRENT_DATE"
+    
+    if pet_id:
+        # Búsqueda exacta por ID
+        query = f"""
+            SELECT 
+                a.id, a.pet_name, a.appointment_date, a.hour, a.status, a.total_cost, a.notes, v.name as veterinaria_nombre, a.pickup_requested, a.pickup_status, a.pet_id
+            FROM appointments a
+            LEFT JOIN veterinary v ON a.veterinary_id = v.id
+            WHERE a.pet_id = %s
+              AND (%s::integer IS NULL OR a.veterinary_id = %s)
+              {date_filter}
+            ORDER BY a.appointment_date DESC, a.hour DESC;
+        """
+        params = (pet_id, veterinary_id, veterinary_id)
+    else:
+        # Búsqueda tradicional por nombre (si no se encontró coincidencia en tabla pets)
+        query = f"""
+            SELECT 
+                a.id, a.pet_name, a.appointment_date, a.hour, a.status, a.total_cost, a.notes, v.name as veterinaria_nombre, a.pickup_requested, a.pickup_status, a.pet_id
+            FROM appointments a
+            LEFT JOIN veterinary v ON a.veterinary_id = v.id
+            WHERE a.pet_name ILIKE %s
+              AND (%s::integer IS NULL OR a.veterinary_id = %s)
+              {date_filter}
+            ORDER BY a.appointment_date DESC, a.hour DESC;
+        """
+        params = (f"%{nombre_mascota}%", veterinary_id, veterinary_id)
+
     try:
         with get_connection() as conn:
             with conn.cursor() as cur:
-                pattern = f"%{nombre_mascota}%"
-                cur.execute(query, (pattern, pattern, veterinary_id, veterinary_id))
+                cur.execute(query, params)
                 rows = cur.fetchall()
-                
                 if not rows:
                     return {"status": "success", "found": False, "data": []}
                 
@@ -114,7 +161,7 @@ def buscar_citas_por_mascota(nombre_mascota: str, veterinary_id: int = None) -> 
                         "hora": str(row[3]),
                         "estado": row[4],
                         "costo_total": float(row[5]) if row[5] is not None else 0.0,
-                        "notas": row[6] if row[6] else "",
+                        "notes": row[6] if row[6] else "",
                         "veterinaria": row[7] if row[7] else "Desconocida",
                         "recoleccion_solicitada": bool(row[8]),
                         "recoleccion_estado": row[9] if row[9] else "No aplica",
@@ -278,6 +325,8 @@ def ver_citas_por_fecha(fecha_inicio: str = None, fecha_fin: str = None, veterin
     Obtiene las citas agendadas para una fecha, rango de fechas, o citas futuras/pendientes desde hoy.
     """
     import datetime
+    if isinstance(rango_futuro, str):
+        rango_futuro = rango_futuro.lower() in ("true", "1", "yes")
     si_no_se_dieron_fechas = not fecha_inicio and not fecha_fin
 
     if not fecha_inicio:
@@ -440,16 +489,29 @@ def confirmar_o_rechazar_cita(appointment_id: int, accion: str, motivo: str = No
     return actualizar_estado_cita(appointment_id=appointment_id, nuevo_estado=nuevo_estado, motivo_cancelacion=motivo, veterinary_id=veterinary_id)
 
 def buscar_dueno_mascota(pet_id: int = None, nombre_mascota: str = None, veterinary_id: int = None) -> dict:
+    if not pet_id and nombre_mascota:
+        check_query = "SELECT DISTINCT p.id, p.name, p.specie, p.breed, u.name as dueno_nombre FROM pets p JOIN users_app u ON p.user_id = u.id WHERE p.name ILIKE %s"
+        try:
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(check_query, (f"%{nombre_mascota}%",))
+                    pets = cur.fetchall()
+                    if len(pets) > 1:
+                        list_pets = [{"id": p[0], "nombre": p[1], "especie": p[2], "raza": p[3] if p[3] else "N/A", "dueno": p[4]} for p in pets]
+                        return {
+                            "status": "multiple_found",
+                            "message": f"Se encontraron múltiples mascotas con el nombre '{nombre_mascota}'. Por favor especifica cuál indicando su ID.",
+                            "data": list_pets
+                        }
+                    elif len(pets) == 1:
+                        pet_id = pets[0][0]
+        except Exception as e:
+            pass
+
     query = """
         SELECT DISTINCT
-            u.id as dueno_id,
-            u.name as dueno_nombre,
-            u.phone_number as dueno_telefono,
-            u.email as dueno_email,
-            p.id as mascota_id,
-            p.name as mascota_nombre,
-            p.specie as mascota_especie,
-            p.breed as mascota_raza
+            u.id as dueno_id, u.name as dueno_nombre, u.phone_number as dueno_telefono, u.email as dueno_email,
+            p.id as mascota_id, p.name as mascota_nombre, p.specie as mascota_especie, p.breed as mascota_raza
         FROM pets p
         JOIN users_app u ON p.user_id = u.id
         LEFT JOIN appointments a ON p.id = a.pet_id
@@ -466,20 +528,140 @@ def buscar_dueno_mascota(pet_id: int = None, nombre_mascota: str = None, veterin
                 if not rows:
                     return {"status": "success", "found": False, "data": []}
                 
-                owners = []
-                for row in rows:
-                    owners.append({
-                        "dueno_id": row[0],
-                        "dueno_nombre": row[1],
-                        "dueno_telefono": row[2],
-                        "dueno_email": row[3],
-                        "mascota_id": row[4],
-                        "mascota_nombre": row[5],
-                        "mascota_especie": row[6],
-                        "mascota_raza": row[7] if row[7] else "No especificada"
-                    })
+                owners = [{"dueno_id": r[0], "dueno_nombre": r[1], "dueno_telefono": r[2], "dueno_email": r[3], "mascota_id": r[4], "mascota_nombre": r[5], "mascota_especie": r[6], "mascota_raza": r[7] if r[7] else "No especificada"} for r in rows]
                 return {"status": "success", "found": True, "data": owners}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
 
+
+
+def buscar_citas_por_estado(estado: str, veterinary_id: int = None, incluir_pasadas: bool = False) -> dict:
+    if isinstance(incluir_pasadas, str):
+        incluir_pasadas = incluir_pasadas.lower() in ("true", "1", "yes")
+    date_filter = "" if incluir_pasadas else "AND a.appointment_date >= CURRENT_DATE"
+    query = f"""
+        SELECT 
+            a.id, a.pet_name, a.appointment_date, a.hour, a.status, a.total_cost, a.notes, v.name as veterinaria_nombre, a.pickup_requested, a.pickup_status, a.pet_id
+        FROM appointments a
+        LEFT JOIN veterinary v ON a.veterinary_id = v.id
+        WHERE a.status ILIKE %s AND (%s::integer IS NULL OR a.veterinary_id = %s)
+        {date_filter}
+        ORDER BY a.appointment_date DESC, a.hour DESC
+        LIMIT 50
+    """
+    try:
+        from app.services.db_client import get_connection
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (estado, veterinary_id, veterinary_id))
+                rows = cur.fetchall()
+                if not rows:
+                    return {"status": "success", "found": False, "data": []}
+                citas = []
+                for row in rows:
+                    citas.append({
+                        "id": row[0], "mascota": row[1], "fecha": str(row[2]), "hora": str(row[3]),
+                        "estado": row[4], "costo_total": float(row[5]) if row[5] is not None else 0.0,
+                        "notas": row[6] if row[6] else "", "veterinaria": row[7] if row[7] else "Desconocida",
+                        "recoleccion_solicitada": bool(row[8]), "recoleccion_estado": row[9] if row[9] else "No aplica", "pet_id": row[10]
+                    })
+                return {"status": "success", "found": True, "data": citas}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+def ver_detalles_cita(appointment_id: int, veterinary_id: int = None) -> dict:
+    query = """
+        SELECT 
+            a.id, a.pet_name, a.appointment_date, a.hour, a.status, a.total_cost, a.notes, a.pet_id,
+            u.name as dueno_nombre, u.phone_number as dueno_telefono, u.email as dueno_email,
+            p.specie as mascota_especie, p.breed as mascota_raza, p.sex as mascota_sexo
+        FROM appointments a
+        LEFT JOIN pets p ON a.pet_id = p.id
+        LEFT JOIN users_app u ON p.user_id = u.id
+        WHERE a.id = %s AND (%s::integer IS NULL OR a.veterinary_id = %s)
+    """
+    query_historial = """
+        SELECT id, appointment_date, hour, status, notes
+        FROM appointments
+        WHERE pet_id = %s AND id != %s AND (%s::integer IS NULL OR veterinary_id = %s)
+        ORDER BY appointment_date DESC, hour DESC
+        LIMIT 3
+    """
+    try:
+        from app.services.db_client import get_connection
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (appointment_id, veterinary_id, veterinary_id))
+                row = cur.fetchone()
+                if not row:
+                    return {"status": "success", "found": False, "message": "No se encontró la cita."}
+                
+                cita = {
+                    "id": row[0], "mascota": row[1], "fecha": str(row[2]), "hora": str(row[3]),
+                    "estado": row[4], "costo_total": float(row[5]) if row[5] else 0.0,
+                    "notas": row[6] if row[6] else "", "pet_id": row[7],
+                    "dueno": {
+                        "nombre": row[8] if row[8] else "Desconocido", "telefono": row[9] if row[9] else "N/A", "email": row[10] if row[10] else "N/A"
+                    },
+                    "mascota_detalles": {
+                        "especie": row[11] if row[11] else "Desconocida", "raza": row[12] if row[12] else "N/A", "sexo": row[13] if row[13] else "N/A"
+                    },
+                    "citas_previas": []
+                }
+                if row[7]:
+                    cur.execute(query_historial, (row[7], appointment_id, veterinary_id, veterinary_id))
+                    historial = cur.fetchall()
+                    for h in historial:
+                        cita["citas_previas"].append({
+                            "id": h[0], "fecha": str(h[1]), "hora": str(h[2]), "estado": h[3], "notas": h[4] if h[4] else ""
+                        })
+                return {"status": "success", "found": True, "data": cita}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+def buscar_info_contacto_dueno(nombre_dueno: str, veterinary_id: int = None, user_id: int = None) -> dict:
+    """
+    Busca la información de contacto de un dueño.
+    Retorna multiple_found si hay múltiples dueños con el mismo nombre y no hay user_id.
+    """
+    if not user_id:
+        check_query = "SELECT id, name, phone_number, email FROM users_app WHERE name ILIKE %s"
+        try:
+            from app.services.db_client import get_connection
+            with get_connection() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(check_query, (f"%{nombre_dueno}%",))
+                    users = cur.fetchall()
+                    if len(users) > 1:
+                        list_users = [{"id": u[0], "nombre": u[1], "telefono": u[2], "email": u[3]} for u in users]
+                        return {
+                            "status": "multiple_found",
+                            "message": f"Se encontraron múltiples dueños con el nombre '{nombre_dueno}'. Por favor especifica cuál indicando su ID.",
+                            "data": list_users
+                        }
+                    elif len(users) == 1:
+                        user_id = users[0][0]
+        except Exception as e:
+            pass
+
+    if user_id:
+        query = "SELECT DISTINCT id, name, phone_number, email FROM users_app WHERE id = %s"
+        params = (user_id,)
+    else:
+        query = "SELECT DISTINCT id, name, phone_number, email FROM users_app WHERE name ILIKE %s"
+        params = (f"%{nombre_dueno}%",)
+
+    try:
+        from app.services.db_client import get_connection
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, params)
+                rows = cur.fetchall()
+                if not rows:
+                    return {"status": "success", "found": False, "data": []}
+                duenos = [{"dueno_id": r[0], "nombre": r[1], "telefono": r[2] if r[2] else "No registrado", "email": r[3] if r[3] else "No registrado"} for r in rows]
+                return {"status": "success", "found": True, "data": duenos}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}

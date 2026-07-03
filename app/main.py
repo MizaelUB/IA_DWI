@@ -7,6 +7,8 @@ from app.services.recuperacion import cargar_base_vectorial
 from app.api.routes import calentar_modelo_ollama
 import app.api.routes as routes
 
+from fastapi.staticfiles import StaticFiles
+
 app = FastAPI(title="Swingtails RAG Sandbox API")
 
 app.add_middleware(
@@ -20,6 +22,7 @@ app.add_middleware(
 app.middleware("http")(middleware_guardrails)
 
 app.include_router(api_router)
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.on_event("startup")
 def startup_event():
