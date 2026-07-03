@@ -2,7 +2,7 @@ import os
 import sqlite3
 from typing import List, Dict
 
-DB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "db")
+from app.core.config import DB_DIR
 DB_PATH = os.path.join(DB_DIR, "sessions.db")
 
 def inicializar_db():

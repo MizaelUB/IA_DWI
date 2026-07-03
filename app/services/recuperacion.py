@@ -5,8 +5,8 @@ import re
 import os
 
 def cargar_base_vectorial():
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    ruta_db = os.path.join(script_dir, "mi_base_vectorial")
+    from app.core.config import VECTOR_DB_DIR
+    ruta_db = VECTOR_DB_DIR
     
     print(f"Cargando base vectorial desde: {ruta_db}")
     ollama_ef = embedding_functions.OllamaEmbeddingFunction(

@@ -16,7 +16,8 @@ from datetime import datetime, timezone
 GUARDRAILS_THRESHOLD = int(os.environ.get("GUARDRAILS_THRESHOLD", "65"))
 MAX_INPUT_LENGTH = int(os.environ.get("GUARDRAILS_MAX_INPUT", "2000"))
 DEFENSIVE_RESPONSE = "No puedo procesar esta solicitud. Por favor, reformula tu pregunta."
-LOG_FILE = os.environ.get("GUARDRAILS_LOG_FILE", os.path.join("logs", "guardrails.log"))
+from app.core.config import LOGS_DIR
+LOG_FILE = os.environ.get("GUARDRAILS_LOG_FILE", os.path.join(LOGS_DIR, "guardrails.log"))
 
 LAYER_WEIGHTS = {"regex": 1.0, "heuristic": 0.8, "delimiter": 1.0}
 

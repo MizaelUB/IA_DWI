@@ -3,8 +3,8 @@ import psycopg2
 from dotenv import load_dotenv
 
 # Cargar variables de entorno del .env en la raíz del proyecto
-workspace_dir = os.path.dirname(os.path.abspath(__file__))
-dotenv_path = os.path.join(workspace_dir, ".env")
+from app.core.config import DOTENV_PATH
+dotenv_path = DOTENV_PATH
 load_dotenv(dotenv_path)
 
 def get_connection():

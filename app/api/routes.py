@@ -7,32 +7,24 @@ import datetime
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import List
+from app.models.schemas import Message, ChatRequest
 from fastapi import UploadFile, File
 import re
 import uuid
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from recuperacion import cargar_base_vectorial, extraer_palabras_clave, es_seccion_query, tiene_coincidencia_palabras, normalizar_texto, obtener_conceptos_relacionados
-import db_client
-import session_store
-from guardrails import middleware_guardrails
-from voice import transcribir_audio, voice_status
+from app.services.recuperacion import cargar_base_vectorial, extraer_palabras_clave, es_seccion_query, tiene_coincidencia_palabras, normalizar_texto, obtener_conceptos_relacionados
+from app.services import db_client
+from app.services import session_store
+from app.core.guardrails import middleware_guardrails
+from app.services.voice_service import transcribir_audio, voice_status
 
-app = FastAPI(title="Swingtails RAG Sandbox API")
+from fastapi import APIRouter
 
-# Middleware CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+router = APIRouter()
 
-# Middleware de guardrails contra inyección de prompts
-app.middleware("http")(middleware_guardrails)
+
+
+(middleware_guardrails)
 
 coleccion = None
 NUM_CTX = 16384
@@ -72,7 +64,7 @@ def calentar_modelo_ollama(modelo: str = "llama3.2:3b"):
     except Exception as e:
         print(f"Advertencia: No se pudo calentar el modelo. {e}")
 
-@app.on_event("startup")
+@router.on_event("startup")
 def startup_event():
     global coleccion
     try:
@@ -90,21 +82,7 @@ def startup_event():
     # Llamamos al warm-up para evitar demoras en la primera consulta
     calentar_modelo_ollama()
 
-class Message(BaseModel):
-    role: str
-    content: str
 
-class ChatRequest(BaseModel):
-    question: str
-    model: str = "llama3.2:3b"
-    concept_model: str = "llama3.2:3b"
-    limit_chunks: int = 5
-    history: List[Message] = []
-    autonomous_search: bool = False
-    veterinary_id: int | None = None
-    conversation_id: str | None = None
-    user_id: int | None = None
-    is_follow_up: bool = False
 
 
 def parsear_fecha(fecha_str: str, año_defecto: int) -> str:
@@ -630,7 +608,7 @@ def generar_respuesta_ollama(messages_final, modelo_llm):
 # ============================================================
 # Endpoint original /api/chat (sin streaming)
 # ============================================================
-@app.post("/api/chat")
+@router.post("/api/chat")
 def api_chat(req: ChatRequest):
     global coleccion
     if coleccion is None:
@@ -715,7 +693,7 @@ def api_chat(req: ChatRequest):
 # ============================================================
 # Endpoint con Streaming SSE /api/chat/stream
 # ============================================================
-@app.post("/api/chat/stream")
+@router.post("/api/chat/stream")
 def api_chat_stream(req: ChatRequest):
     global coleccion
     if coleccion is None:
@@ -859,19 +837,19 @@ def api_chat_stream(req: ChatRequest):
 # ============================================================
 # Endpoint de transcripción de voz
 # ============================================================
-@app.post("/api/voice/transcribe")
+@router.post("/api/voice/transcribe")
 async def api_voice_transcribe(audio: UploadFile = File(...)):
     """Recibe un archivo de audio y retorna la transcripción usando Whisper local."""
     return await transcribir_audio(audio)
 
 
-@app.get("/api/voice/status")
+@router.get("/api/voice/status")
 def api_voice_status():
     """Diagnóstico: indica si Whisper está disponible o si se usa Web Speech API como fallback."""
     return voice_status()
 
 
-@app.get("/api/chat/history")
+@router.get("/api/chat/history")
 def get_chat_history(conversation_id: str | None = None, veterinary_id: int | None = None, user_id: int | None = None):
     user_id = user_id or 1
     if not conversation_id and veterinary_id is not None:
@@ -883,7 +861,7 @@ def get_chat_history(conversation_id: str | None = None, veterinary_id: int | No
     history = session_store.obtener_historial(conversation_id, user_id)
     return {"conversation_id": conversation_id, "history": history}
 
-@app.delete("/api/chat/history")
+@router.delete("/api/chat/history")
 def delete_chat_history(conversation_id: str | None = None, veterinary_id: int | None = None, user_id: int | None = None):
     user_id = user_id or 1
     if conversation_id:
@@ -895,10 +873,10 @@ def delete_chat_history(conversation_id: str | None = None, veterinary_id: int |
     else:
         raise HTTPException(status_code=400, detail="Must provide conversation_id or veterinary_id")
 
-@app.get("/", response_class=HTMLResponse)
+@router.get("/", response_class=HTMLResponse)
 def get_home():
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    static_file = os.path.join(script_dir, "static", "index.html")
+    from app.core.config import STATIC_DIR
+    static_file = os.path.join(STATIC_DIR, "index.html")
     if os.path.exists(static_file):
         return FileResponse(static_file)
     else:
