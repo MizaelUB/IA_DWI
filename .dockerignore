@@ -1,0 +1,8 @@
+.venv
+.git
+frontend
+tmp
+db
+logs
+mi_base_vectorial
+*.log

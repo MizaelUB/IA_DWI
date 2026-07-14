@@ -14,7 +14,7 @@ export default function LoginPage() {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    if (!isLoading && user) router.replace('/resumen');
+    if (!isLoading && user) router.replace('/asistente');
   }, [user, isLoading, router]);
 
   const handleSubmit = async (e: FormEvent) => {
@@ -24,7 +24,7 @@ export default function LoginPage() {
     setSubmitting(true);
     const result = await login(username.trim(), password.trim());
     if (result.success) {
-      router.push('/resumen');
+      router.push('/asistente');
     } else {
       setError(result.error || 'Error desconocido');
     }

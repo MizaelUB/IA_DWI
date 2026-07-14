@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useDashboard } from '@/contexts/DashboardContext';
 import { useChatSSE } from '@/hooks/useChatSSE';
 import { ChatMessageView, ToolIndicatorView } from '@/components/asistente/ChatMessage';
-import { SparklesIcon, ArrowRightIcon, RefreshIcon, PlusIcon, CalendarIcon, PawIcon, XCircleIcon, InfoIcon } from '@/components/ui/Icons';
+import { SparklesIcon, ArrowRightIcon, RefreshIcon, InfoIcon } from '@/components/ui/Icons';
 
 const SUGGEST_PROMPTS = [
   'Dame un resumen del día',
@@ -106,23 +106,6 @@ export default function AsistentePage() {
         </div>
 
         <aside className="ai-side" aria-label="Sugerencias y acciones">
-          <div className="side-block">
-            <h3 className="side-title">Acciones rápidas</h3>
-            <div className="side-actions">
-              <button className="side-action" onClick={() => handleAskAI('Crea una cita para hoy')}>
-                <span className="side-action-ic"><PlusIcon /></span> Crear cita
-              </button>
-              <button className="side-action" onClick={() => handleNavigate('/calendario')}>
-                <span className="side-action-ic"><CalendarIcon /></span> Ver calendario
-              </button>
-              <button className="side-action" onClick={() => handleNavigate('/pacientes')}>
-                <span className="side-action-ic"><PawIcon size={17} /></span> Gestionar pacientes
-              </button>
-              <button className="side-action" onClick={() => handleAskAI('Cancela la cita más antigua pendiente')}>
-                <span className="side-action-ic"><XCircleIcon /></span> Cancelar cita
-              </button>
-            </div>
-          </div>
           <div className="side-block">
             <h3 className="side-title">Preguntas sugeridas</h3>
             <div className="side-prompts">

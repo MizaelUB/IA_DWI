@@ -10,7 +10,7 @@ def cargar_base_vectorial():
     
     print(f"Cargando base vectorial desde: {ruta_db}")
     ollama_ef = embedding_functions.OllamaEmbeddingFunction(
-        url="http://localhost:11434/api/embeddings",
+        url=f"{os.environ.get('OLLAMA_URL', 'http://localhost:11434')}/api/embeddings",
         model_name="nomic-embed-text"
     )
     client = chromadb.PersistentClient(path=ruta_db)
@@ -137,7 +137,7 @@ Swingtails, plataforma digital, gestión veterinaria, veterinarias México
         {"role": "user", "content": f"Pregunta: {pregunta}"}
     ]
     
-    url = "http://localhost:11434/api/chat"
+    url = f"{os.environ.get('OLLAMA_URL', 'http://localhost:11434')}/api/chat"
     payload = {
         "model": modelo_llm,
         "messages": mensajes,
@@ -252,7 +252,7 @@ INSTRUCCIONES DE RESPUESTA:
 4. No uses tu conocimiento general. No inventes, deduzcas ni supongas nada que no esté explícitamente escrito.
 5. Si el usuario te hace preguntas banales, personales, de conversación casual, o sin relación directa con el proyecto Swingtails y el contexto clínico/mercadotecnia proporcionado, debes responder única y exclusivamente con la frase exacta: "No tengo información en la base de datos".
 """
-    url = "http://localhost:11434/api/chat"
+    url = f"{os.environ.get('OLLAMA_URL', 'http://localhost:11434')}/api/chat"
     payload = {
         "model": modelo_llm,
         "messages": [

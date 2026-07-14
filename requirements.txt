@@ -12,6 +12,7 @@ python-dotenv==1.2.2
 
 # Base vectorial (RAG / ChromaDB)
 chromadb==1.5.9
+ollama==0.4.7
 
 # Procesamiento de documentos (PDF e indexación)
 PyMuPDF==1.27.2.3

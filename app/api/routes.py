@@ -51,7 +51,7 @@ TOOL_LABELS = {
 def calentar_modelo_ollama(modelo: str = "llama3.2:3b"):
     """Fuerza a Ollama a cargar el modelo en memoria al iniciar el servidor."""
     print(f"Calentando modelo {modelo} en memoria...")
-    url = "http://localhost:11434/api/chat"
+    url = f"{os.environ.get('OLLAMA_URL', 'http://localhost:11434')}/api/chat"
     payload = {
         "model": modelo,
         "messages": [{"role": "user", "content": "Hola"}],
@@ -638,9 +638,126 @@ def detectar_y_ejecutar_tools(tool_calls_detected, pregunta_original, req, año_
     return context_chunks, contiene_rag
 
 
+def mapear_pregunta_sugerida(pregunta: str) -> list:
+    """
+    Normaliza la pregunta y evalúa si coincide exactamente con alguna de las
+    preguntas sugeridas de la interfaz, en cuyo caso retorna la llamada
+    de herramienta predefinida óptima para evitar errores de detección de Ollama.
+    """
+    prog_norm = normalizar_texto(pregunta).strip().replace("?", "").replace("¿", "")
+    fecha_actual_dt = datetime.date.today()
+    fecha_actual_str = str(fecha_actual_dt)
+    
+    # 1. Dame un resumen del día
+    if prog_norm in ("dame un resumen del dia", "resumen del dia"):
+        return [{
+            "function": {
+                "name": "ver_citas_por_fecha",
+                "arguments": {
+                    "fecha_inicio": fecha_actual_str,
+                    "fecha_fin": fecha_actual_str
+                }
+            }
+        }]
+    
+    # 2. Crea una cita
+    elif prog_norm in ("crea una cita", "crear una cita", "crear cita"):
+        return [{
+            "function": {
+                "name": "consultar_manuales_y_procesos_generales",
+                "arguments": {
+                    "pregunta": "Cómo crear una cita en Swingtails"
+                }
+            }
+        }]
+        
+    # 3. Muéstrame el historial de un paciente
+    elif prog_norm in ("muestrame el historial de un paciente", "historial de un paciente"):
+        return [{
+            "function": {
+                "name": "consultar_manuales_y_procesos_generales",
+                "arguments": {
+                    "pregunta": "Cómo buscar o consultar el historial de una mascota"
+                }
+            }
+        }]
+        
+    # 4. Prioriza los pacientes de hoy
+    elif prog_norm in ("prioriza los pacientes de hoy", "priorizar los pacientes de hoy"):
+        return [{
+            "function": {
+                "name": "ver_citas_por_fecha",
+                "arguments": {
+                    "fecha_inicio": fecha_actual_str,
+                    "fecha_fin": fecha_actual_str
+                }
+            }
+        }]
+        
+    # 5. ¿Cuántas citas hay hoy y cuántas están pendientes?
+    elif prog_norm in ("cuantas citas hay hoy y cuantas estan pendientes", "cuantas citas hay hoy y cuantas pendientes"):
+        return [{
+            "function": {
+                "name": "ver_citas_por_fecha",
+                "arguments": {
+                    "fecha_inicio": fecha_actual_str,
+                    "fecha_fin": fecha_actual_str
+                }
+            }
+        }]
+        
+    # 6. ¿Qué pacientes tienen más visitas registradas?
+    elif prog_norm in ("que pacientes tienen mas visitas registradas", "pacientes con mas visitas registradas"):
+        return [{
+            "function": {
+                "name": "consultar_manuales_y_procesos_generales",
+                "arguments": {
+                    "pregunta": "Visualizar reportes de pacientes con más visitas o historial general"
+                }
+            }
+        }]
+        
+    # 7. Dame un análisis de la carga de citas de esta semana
+    elif prog_norm in ("dame un analisis de la carga de citas de esta semana", "analisis de la carga de citas de esta semana"):
+        # Calcular lunes y domingo de la semana
+        dia_semana = fecha_actual_dt.weekday()
+        lunes = fecha_actual_dt - datetime.timedelta(days=dia_semana)
+        domingo = lunes + datetime.timedelta(days=6)
+        return [{
+            "function": {
+                "name": "ver_citas_por_fecha",
+                "arguments": {
+                    "fecha_inicio": lunes.strftime("%Y-%m-%d"),
+                    "fecha_fin": domingo.strftime("%Y-%m-%d")
+                }
+            }
+        }]
+        
+    # 8. Confirma todas las citas pendientes de hoy
+    elif prog_norm in ("confirma todas las citas pendientes de hoy", "confirmar todas las citas pendientes de hoy"):
+        return [{
+            "function": {
+                "name": "ver_citas_por_fecha",
+                "arguments": {
+                    "fecha_inicio": fecha_actual_str,
+                    "fecha_fin": fecha_actual_str,
+                    "estado": "Pendiente"
+                }
+            }
+        }]
+        
+    return []
+
+
 def detectar_tools_en_ollama(messages_with_history, modelo_llm, pregunta_original, coleccion):
     """Llama a Ollama para detectar tool calls. Retorna lista de tool_calls detectados."""
-    url = "http://localhost:11434/api/chat"
+    # Intentar interceptar preguntas sugeridas del frontend heurísticamente
+    sugerida_tools = mapear_pregunta_sugerida(pregunta_original)
+    if sugerida_tools:
+        print(f"✔ Pregunta sugerida detectada heurísticamente: {pregunta_original} -> {sugerida_tools}")
+        return sugerida_tools
+
+    url = f"{os.environ.get('OLLAMA_URL', 'http://localhost:11434')}/api/chat"
     
     payload_tools = {
         "model": modelo_llm,
@@ -679,7 +796,7 @@ def detectar_tools_en_ollama(messages_with_history, modelo_llm, pregunta_origina
 
 def generar_respuesta_ollama(messages_final, modelo_llm):
     """Genera una respuesta completa (sin streaming) desde Ollama."""
-    url = "http://localhost:11434/api/chat"
+    url = f"{os.environ.get('OLLAMA_URL', 'http://localhost:11434')}/api/chat"
     payload_final = {
         "model": modelo_llm,
         "messages": messages_final,
@@ -851,7 +968,7 @@ def api_chat_stream(req: ChatRequest):
             messages_final = [{"role": "system", "content": prompt_sistema_final}] + messages_final[1:]
 
         # 4. Streaming desde Ollama
-        url = "http://localhost:11434/api/chat"
+        url = f"{os.environ.get('OLLAMA_URL', 'http://localhost:11434')}/api/chat"
         payload_final = {
             "model": modelo_llm,
             "messages": messages_final,
