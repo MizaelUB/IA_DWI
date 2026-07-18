@@ -9,7 +9,7 @@ import { SparklesIcon, ArrowRightIcon, RefreshIcon, InfoIcon } from '@/component
 
 const SUGGEST_PROMPTS = [
   'Dame un resumen del día',
-  'Crea una cita',
+  'Consulta citas pendientes',
   'Muéstrame el historial de un paciente',
   'Prioriza los pacientes de hoy',
 ];
@@ -116,7 +116,7 @@ export default function AsistentePage() {
           </div>
           <div className="side-note">
             <span className="side-note-ic"><InfoIcon /></span>
-            <p>El asistente puede crear, confirmar y cancelar citas usando las funciones conectadas al sistema.</p>
+            <p>El asistente puede consultar, confirmar y cancelar citas usando las funciones conectadas al sistema.</p>
           </div>
         </aside>
       </div>

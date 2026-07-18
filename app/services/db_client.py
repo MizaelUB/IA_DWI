@@ -334,7 +334,7 @@ def ver_citas_por_fecha(fecha_inicio: str = None, fecha_fin: str = None, veterin
         
     if si_no_se_dieron_fechas:
         rango_futuro = False
-        fecha_fin = str(datetime.date.today() + datetime.timedelta(days=30))
+        fecha_fin = fecha_inicio
 
     if rango_futuro:
         query = """
@@ -359,10 +359,7 @@ def ver_citas_por_fecha(fecha_inicio: str = None, fecha_fin: str = None, veterin
         """
     else:
         if not fecha_fin:
-            if si_no_se_dieron_fechas:
-                fecha_fin = str(datetime.date.today() + datetime.timedelta(days=30))
-            else:
-                fecha_fin = fecha_inicio
+            fecha_fin = fecha_inicio
         query = """
             SELECT 
                 a.id,
@@ -539,7 +536,7 @@ def buscar_dueno_mascota(pet_id: int = None, nombre_mascota: str = None, veterin
 def buscar_citas_por_estado(estado: str, veterinary_id: int = None, incluir_pasadas: bool = False) -> dict:
     if isinstance(incluir_pasadas, str):
         incluir_pasadas = incluir_pasadas.lower() in ("true", "1", "yes")
-    date_filter = "" if incluir_pasadas else "AND a.appointment_date >= CURRENT_DATE"
+    date_filter = "" if incluir_pasadas else "AND a.appointment_date >= CURRENT_DATE AND a.appointment_date <= CURRENT_DATE + INTERVAL '30 days'"
     query = f"""
         SELECT 
             a.id, a.pet_name, a.appointment_date, a.hour, a.status, a.total_cost, a.notes, v.name as veterinaria_nombre, a.pickup_requested, a.pickup_status, a.pet_id

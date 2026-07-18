@@ -6,7 +6,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { PawIcon } from '@/components/ui/Icons';
 
 export default function LoginPage() {
-  const { user, isLoading, login } = useAuth();
+  const { user, isLoading, login, loginAsGuest } = useAuth();
   const router = useRouter();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -27,6 +27,18 @@ export default function LoginPage() {
       router.push('/asistente');
     } else {
       setError(result.error || 'Error desconocido');
+    }
+    setSubmitting(false);
+  };
+
+  const handleGuestLogin = async () => {
+    setError('');
+    setSubmitting(true);
+    const result = await loginAsGuest();
+    if (result.success) {
+      router.push('/asistente');
+    } else {
+      setError(result.error || 'Error al conectar');
     }
     setSubmitting(false);
   };
@@ -85,6 +97,10 @@ export default function LoginPage() {
             <p className="login-error" role="alert">{error}</p>
             <button type="submit" className="btn btn-primary btn-block" disabled={submitting}>
               {submitting ? 'Conectando…' : 'Iniciar sesión'}
+            </button>
+            <div style={{ textAlign: 'center', margin: '12px 0', fontSize: '0.9rem', color: 'var(--text-muted)' }}>o</div>
+            <button type="button" onClick={handleGuestLogin} className="btn btn-ghost btn-block" disabled={submitting}>
+              Continuar como invitado
             </button>
           </form>
         </div>

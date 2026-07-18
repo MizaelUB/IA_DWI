@@ -20,7 +20,7 @@ export function useChatSSE(veterinaryId: number | null) {
   const WELCOME_MSG: ChatMessage = {
     id: 'welcome',
     role: 'bot',
-    content: 'Hola, soy tu asistente de Swingtails. Puedo ayudarte a revisar citas, consultar historiales, priorizar pacientes o crear y cancelar turnos. ¿Qué necesitas?',
+    content: 'Hola, soy tu asistente de Swingtails. Puedo ayudarte a revisar citas, consultar historiales, priorizar pacientes o cancelar turnos. ¿Qué necesitas?',
     isMarkdown: false,
   };
 
@@ -28,8 +28,19 @@ export function useChatSSE(veterinaryId: number | null) {
     const storedConvId = localStorage.getItem('conversation_id');
     if (storedConvId) setConversationId(storedConvId);
 
+    let userId: number | undefined = undefined;
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem('clinic_session');
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored);
+          if (parsed && parsed.user_id) userId = parsed.user_id;
+        } catch {}
+      }
+    }
+
     try {
-      const data = await fetchChatHistory(storedConvId, veterinaryId);
+      const data = await fetchChatHistory(storedConvId, veterinaryId, userId);
       if (data.conversation_id) {
         setConversationId(data.conversation_id);
         localStorage.setItem('conversation_id', data.conversation_id);
@@ -73,6 +84,17 @@ export function useChatSSE(veterinaryId: number | null) {
       setToolIndicator(null);
 
       try {
+        let userId: number | undefined = undefined;
+        if (typeof window !== 'undefined') {
+          const stored = localStorage.getItem('clinic_session');
+          if (stored) {
+            try {
+              const parsed = JSON.parse(stored);
+              if (parsed && parsed.user_id) userId = parsed.user_id;
+            } catch {}
+          }
+        }
+
         const response = await fetch('/api/chat/stream', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -80,6 +102,7 @@ export function useChatSSE(veterinaryId: number | null) {
             question: text,
             conversation_id: conversationId,
             veterinary_id: veterinaryId,
+            user_id: userId,
           }),
         });
 
@@ -131,6 +154,7 @@ export function useChatSSE(veterinaryId: number | null) {
                     );
                     break;
                   case 'error':
+                    accumulated = data.message;
                     setMessages((prev) =>
                       prev.map((m) =>
                         m.id === streamId ? { ...m, content: data.message, isStreaming: false } : m,
@@ -172,7 +196,17 @@ export function useChatSSE(veterinaryId: number | null) {
   );
 
   const clearConversation = useCallback(async () => {
-    await deleteChatHistory(conversationId, veterinaryId);
+    let userId: number | undefined = undefined;
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem('clinic_session');
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored);
+          if (parsed && parsed.user_id) userId = parsed.user_id;
+        } catch {}
+      }
+    }
+    await deleteChatHistory(conversationId, veterinaryId, userId);
     setConversationId(null);
     localStorage.removeItem('conversation_id');
     setMessages([WELCOME_MSG]);

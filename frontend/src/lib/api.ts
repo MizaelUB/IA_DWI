@@ -42,23 +42,25 @@ export async function fetchClientes(vetId?: string): Promise<Cliente[]> {
   return [];
 }
 
-export async function fetchChatHistory(conversationId?: string | null, vetId?: number | null): Promise<ChatHistoryResponse> {
+export async function fetchChatHistory(conversationId?: string | null, vetId?: number | null, userId?: number | null): Promise<ChatHistoryResponse> {
   let query = '';
   if (conversationId) {
     query = `?conversation_id=${encodeURIComponent(conversationId)}`;
+    if (userId) query += `&user_id=${userId}`;
   } else if (vetId) {
-    query = `?veterinary_id=${vetId}&user_id=1`;
+    query = `?veterinary_id=${vetId}&user_id=${userId || 1}`;
   }
   const res = await fetch(`${BASE}/api/chat/history${query}`);
   return res.json();
 }
 
-export async function deleteChatHistory(conversationId?: string | null, vetId?: number | null): Promise<void> {
+export async function deleteChatHistory(conversationId?: string | null, vetId?: number | null, userId?: number | null): Promise<void> {
   let query = '';
   if (conversationId) {
     query = `?conversation_id=${encodeURIComponent(conversationId)}`;
+    if (userId) query += `&user_id=${userId}`;
   } else if (vetId) {
-    query = `?veterinary_id=${vetId}&user_id=1`;
+    query = `?veterinary_id=${vetId}&user_id=${userId || 1}`;
   }
   await fetch(`${BASE}/api/chat/history${query}`, { method: 'DELETE' });
 }

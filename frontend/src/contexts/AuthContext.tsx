@@ -9,6 +9,7 @@ interface AuthContextType {
   user: Session | null;
   isLoading: boolean;
   login: (username: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  loginAsGuest: () => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
 }
 
@@ -39,12 +40,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         username: data.username,
         veterinary_id: data.veterinary_id,
         veterinary_name: data.veterinary_name,
+        user_id: data.user_id,
       };
       localStorage.setItem('clinic_session', JSON.stringify(session));
       setUser(session);
       return { success: true };
     }
     return { success: false, error: data.detail || 'Usuario o contraseña incorrectos.' };
+  }, []);
+
+  const loginAsGuest = useCallback(async () => {
+    try {
+      const res = await fetch('/api/auth/guest', { method: 'POST' });
+      const data = await res.json();
+      if (data.status === 'success') {
+        const session: Session = {
+          username: data.username,
+          veterinary_id: data.veterinary_id,
+          veterinary_name: data.veterinary_name,
+          user_id: data.user_id,
+        };
+        localStorage.setItem('clinic_session', JSON.stringify(session));
+        setUser(session);
+        return { success: true };
+      }
+      return { success: false, error: 'No se pudo iniciar sesión como invitado.' };
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : 'Error al conectar' };
+    }
   }, []);
 
   const logout = useCallback(() => {
@@ -55,7 +78,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [router]);
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, login, logout }}>
+    <AuthContext.Provider value={{ user, isLoading, login, loginAsGuest, logout }}>
       {children}
     </AuthContext.Provider>
   );

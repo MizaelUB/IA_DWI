@@ -24,3 +24,7 @@ faster-whisper==1.1.1
 
 # Upload de archivos (multipart)
 python-multipart==0.0.20
+
+# Reranker y Búsqueda Híbrida
+sentence-transformers==3.0.1
+rank_bm25==0.2.2

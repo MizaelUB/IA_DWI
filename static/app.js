@@ -819,6 +819,7 @@
                             } else if (currentEvent === 'done') {
                                 finalizeStreamBubble(streamMsgId, acc);
                             } else if (currentEvent === 'error') {
+                                acc = data.message;
                                 const bubble = document.getElementById(streamMsgId).querySelector('.msg-body .message-bubble');
                                 bubble.innerHTML = `<p style="color:#B23B30">${escapeHtml(data.message)}</p>`;
                             }

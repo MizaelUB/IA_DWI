@@ -666,8 +666,8 @@ ul { list-style: none; }
     .clinic-select { max-width: 150px; }
     .panel-head { padding: 16px; }
     .data-table th, .data-table td { padding: 11px 14px; }
-    .ai-side { flex-direction: column; }
-    .ai-side .side-block { min-width: 0; }
+    .ai-side { display: none; }
+    .suggest-row { display: none; }
 }
 
 @media (max-width: 560px) {
@@ -676,6 +676,7 @@ ul { list-style: none; }
     .clinic-select { display: none; }
     .page-title { font-size: 1.05rem; }
     .filter-chips { width: 100%; }
+    .chat-foot { padding: 12px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

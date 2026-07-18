@@ -3,6 +3,13 @@ from chromadb.utils import embedding_functions
 import requests
 import re
 import os
+from rank_bm25 import BM25Okapi
+from sentence_transformers import CrossEncoder
+
+# Reranker global
+reranker_model = None
+def get_reranker():
+    return None # Reranker desactivado
 
 def cargar_base_vectorial():
     from app.core.config import VECTOR_DB_DIR
@@ -19,6 +26,7 @@ def cargar_base_vectorial():
         embedding_function=ollama_ef
     )
     return coleccion
+
 
 def normalizar_texto(texto):
     texto = texto.lower()
@@ -108,7 +116,7 @@ def limpiar_conceptos(texto_crudo: str) -> list:
             
     return conceptos_filtrados[:4]
 
-def obtener_conceptos_relacionados(pregunta: str, historial: list = None, modelo_llm: str = "llama3.2:3b") -> list:
+def obtener_conceptos_relacionados(pregunta: str, historial: list = None, modelo_llm: str = "deepseek-chat") -> list:
     prompt_sistema = """Tu única tarea es extraer o generar de 2 a 4 conceptos clave o términos de búsqueda muy cortos (de 1 a 3 palabras cada uno) separados por comas, basados en la pregunta del usuario.
 
 REGLAS CRÍTICAS:
@@ -121,7 +129,7 @@ REGLAS CRÍTICAS:
 
 Ejemplos de respuesta correcta:
 Pregunta: ¿Cómo se maneja una queja de cliente?
-protocolo de quejas, servicio al cliente, resolución de conflictos, atención al cliente
+protocol de quejas, servicio al cliente, resolución de conflictos, atención al cliente
 
 Pregunta: ¿Qué vacunas necesita un gato cachorro?
 calendario de vacunación felina, inmunización de cachorros, vacunas para gatos
@@ -137,27 +145,97 @@ Swingtails, plataforma digital, gestión veterinaria, veterinarias México
         {"role": "user", "content": f"Pregunta: {pregunta}"}
     ]
     
-    url = f"{os.environ.get('OLLAMA_URL', 'http://localhost:11434')}/api/chat"
+    url = "https://api.deepseek.com/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {os.environ.get('DEEPSEEK_KEY', '')}"
+    }
     payload = {
         "model": modelo_llm,
         "messages": mensajes,
         "stream": False,
-        "keep_alive": -1, # CORREGIDO: Evita que el modelo se apague
-        "options": {
-            "num_ctx": 8000 
-        }
+        "temperature": 0.1
     }
     
     try:
-        respuesta = requests.post(url, json=payload, timeout=20)
+        respuesta = requests.post(url, json=payload, headers=headers, timeout=20)
         if respuesta.status_code == 200:
-            texto_respuesta = respuesta.json()['message']['content']
+            texto_respuesta = respuesta.json()['choices'][0]['message']['content']
             return limpiar_conceptos(texto_respuesta)
+        else:
+            print(f"Error DeepSeek ({respuesta.status_code}): {respuesta.text}")
     except Exception as e:
         print(f"Error generando conceptos relacionados: {e}")
     return []
 
-def consultar_rag(pregunta: str, coleccion, modelo_llm: str = "llama3.2:3b", autonomous_search: bool = False, historial: list = None):
+
+def realizar_busqueda_hibrida_y_rerank(pregunta: str, query_texts: list, coleccion, n_results: int = 10) -> list:
+    """Implementa Búsqueda Híbrida (BM25 + Vectorial) y Re-ranking (Cross-Encoder)"""
+    docs_vectoriales = []
+    try:
+        res_vect = coleccion.query(
+            query_texts=query_texts,
+            n_results=n_results,
+            include=["documents", "metadatas"]
+        )
+        if res_vect and res_vect['documents']:
+            for i in range(len(res_vect['documents'])):
+                for doc, meta in zip(res_vect['documents'][i], res_vect['metadatas'][i]):
+                    docs_vectoriales.append({"doc": doc, "meta": meta, "source": "vectorial"})
+    except Exception as e:
+        print(f"Error en búsqueda vectorial: {e}")
+
+    docs_lexicos = []
+    try:
+        all_docs = coleccion.get(include=["documents", "metadatas"])
+        corpus = all_docs['documents']
+        metadatas = all_docs['metadatas']
+        if corpus:
+            tokenized_corpus = [doc.lower().split() for doc in corpus]
+            bm25 = BM25Okapi(tokenized_corpus)
+            tokenized_query = normalizar_texto(pregunta).split()
+            top_n_bm25 = bm25.get_top_n(tokenized_query, corpus, n=n_results)
+            
+            for doc in top_n_bm25:
+                idx = corpus.index(doc)
+                docs_lexicos.append({"doc": doc, "meta": metadatas[idx], "source": "bm25"})
+    except Exception as e:
+        print(f"Error en búsqueda léxica BM25: {e}")
+
+    documentos_unicos = {}
+    for item in docs_vectoriales + docs_lexicos:
+        doc_text = item["doc"]
+        if doc_text not in documentos_unicos:
+            documentos_unicos[doc_text] = item
+
+    lista_docs = list(documentos_unicos.values())
+    if not lista_docs:
+        return []
+
+    reranker = get_reranker()
+    if reranker:
+        pairs = [[pregunta, item["doc"]] for item in lista_docs]
+        scores = reranker.predict(pairs)
+        for i, score in enumerate(scores):
+            lista_docs[i]["rerank_score"] = float(score)
+        lista_docs.sort(key=lambda x: x["rerank_score"], reverse=True)
+    
+    # Top-3 óptimo
+    top_3 = lista_docs[:3]
+    
+    context_chunks = []
+    for item in top_3:
+        context_chunks.append({
+            "text": item["doc"],
+            "distance": item.get("rerank_score", 0.0),
+            "theme": item["meta"].get("tema", "Sin Tema"),
+            "source": item["meta"].get("archivo", "Desconocido"),
+            "type": "hibrido_reranked"
+        })
+        
+    return context_chunks
+
+def consultar_rag(pregunta: str, coleccion, modelo_llm: str = "deepseek-v4-pro", autonomous_search: bool = False, historial: list = None):
     """Función independiente para hacer pruebas en consola local."""
     pregunta_optimizada = extraer_palabras_clave(pregunta)
     query_texts = [pregunta, pregunta_optimizada]
@@ -252,7 +330,11 @@ INSTRUCCIONES DE RESPUESTA:
 4. No uses tu conocimiento general. No inventes, deduzcas ni supongas nada que no esté explícitamente escrito.
 5. Si el usuario te hace preguntas banales, personales, de conversación casual, o sin relación directa con el proyecto Swingtails y el contexto clínico/mercadotecnia proporcionado, debes responder única y exclusivamente con la frase exacta: "No tengo información en la base de datos".
 """
-    url = f"{os.environ.get('OLLAMA_URL', 'http://localhost:11434')}/api/chat"
+    url = "https://api.deepseek.com/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {os.environ.get('DEEPSEEK_KEY', '')}"
+    }
     payload = {
         "model": modelo_llm,
         "messages": [
@@ -260,12 +342,14 @@ INSTRUCCIONES DE RESPUESTA:
             {"role": "user", "content": pregunta}
         ],
         "stream": False,
-        "keep_alive": -1, # CORREGIDO: Evita que el modelo se apague
+        "temperature": 1.0,
+        "reasoning_effort": "high",
+        "thinking": {"type": "enabled"}
     }
     
     try:
-        respuesta = requests.post(url, json=payload, timeout=120)
-        return respuesta.json()['message']['content']
+        respuesta = requests.post(url, json=payload, headers=headers, timeout=120)
+        return respuesta.json()['choices'][0]['message']['content']
     except Exception as e:
         return f"Error: {e}"
 

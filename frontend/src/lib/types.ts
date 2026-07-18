@@ -41,6 +41,7 @@ export interface Session {
   username: string;
   veterinary_id: number | null;
   veterinary_name: string;
+  user_id?: number;
 }
 
 export interface ChatMessage {
@@ -61,5 +62,6 @@ export interface LoginResponse {
   username: string;
   veterinary_id: number | null;
   veterinary_name: string;
+  user_id?: number;
   detail?: string;
 }
