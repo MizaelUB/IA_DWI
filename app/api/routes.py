@@ -47,6 +47,8 @@ TOOL_LABELS = {
     "buscar_citas_por_estado": "Buscando citas por estado...",
     "ver_detalles_cita": "Consultando detalles de la cita...",
     "buscar_info_contacto_dueno": "Buscando información de contacto del dueño...",
+    "filtrar_mascotas": "Contando y filtrando mascotas...",
+    "cancelar_cita_por_nombre_mascota": "Cancelando la cita de la mascota...",
 }
 
 
@@ -106,6 +108,48 @@ def parsear_fecha(fecha_str: str, año_defecto: int) -> str:
 # Herramientas de Function Calling (definición)
 # ============================================================
 DB_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "filtrar_mascotas",
+            "description": "Obtiene la cantidad o el listado de mascotas filtradas por especie y/o raza en toda la veterinaria. Úsala cuando pregunten '¿cuántos perros tenemos?', '¿hay gatos registrados?', o para buscar animales de una especie/raza en particular.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "especie": {
+                        "type": "string",
+                        "description": "La especie del animal (ej. Perro, Gato, Ave, Reptil)."
+                    },
+                    "raza": {
+                        "type": "string",
+                        "description": "La raza de la mascota (ej. Pug, Siames)."
+                    }
+                },
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "cancelar_cita_por_nombre_mascota",
+            "description": "Busca la mascota por nombre y, si tiene una cita pendiente próxima, la cancela automáticamente. Úsala cuando el usuario ordene cancelar la cita de una mascota específica.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "nombre_mascota": {
+                        "type": "string",
+                        "description": "El nombre de la mascota cuya cita será cancelada."
+                    },
+                    "nombre_dueno": {
+                        "type": "string",
+                        "description": "El nombre del dueño en caso de que haya varias mascotas con el mismo nombre (opcional)."
+                    }
+                },
+                "required": ["nombre_mascota"]
+            }
+        }
+    },
     {
         "type": "function",
         "function": {
@@ -404,6 +448,17 @@ DB_TOOLS = [
                 }
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "listar_mascotas_con_citas",
+            "description": "Obtiene la lista de todas las mascotas que han tenido o tienen una cita programada en la clínica. Úsala cuando el usuario quiera listar o buscar mascotas sin dar un nombre específico.",
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
     }
 ]
 
@@ -539,6 +594,9 @@ def detectar_y_ejecutar_tools(tool_calls_detected, pregunta_original, req, año_
         "buscar_citas_por_estado": db_client.buscar_citas_por_estado,
         "ver_detalles_cita": db_client.ver_detalles_cita,
         "buscar_info_contacto_dueno": db_client.buscar_info_contacto_dueno,
+        "listar_mascotas_con_citas": db_client.listar_mascotas_con_citas,
+        "filtrar_mascotas": db_client.filtrar_mascotas,
+        "cancelar_cita_por_nombre_mascota": db_client.cancelar_cita_por_nombre_mascota,
     }
     
     context_chunks = []
@@ -806,7 +864,7 @@ async def detectar_tools_en_ollama(messages_with_history, modelo_llm, pregunta_o
     sugerida_tools = mapear_pregunta_sugerida(pregunta_original)
     if sugerida_tools:
         print(f"✔ Pregunta sugerida detectada heurísticamente: {pregunta_original} -> {sugerida_tools}")
-        return sugerida_tools
+        return sugerida_tools, None
 
     url = "https://api.deepseek.com/chat/completions"
     headers = {
@@ -821,8 +879,12 @@ async def detectar_tools_en_ollama(messages_with_history, modelo_llm, pregunta_o
         "stream": False,
         "temperature": 1.0
     }
+    if payload_tools["model"] == "deepseek-v4-pro":
+        payload_tools["reasoning_effort"] = "low"
+        payload_tools["thinking"] = {"type": "enabled"}
 
     tool_calls_detected = []
+    llm_text_fallback = None
     try:
         async with httpx.AsyncClient() as client:
             res_tools = await client.post(url, json=payload_tools, headers=headers, timeout=45.0)
@@ -833,6 +895,8 @@ async def detectar_tools_en_ollama(messages_with_history, modelo_llm, pregunta_o
                     message_resp = choices[0].get("message", {})
                     if "tool_calls" in message_resp and message_resp["tool_calls"]:
                         tool_calls_detected = message_resp["tool_calls"]
+                    else:
+                        llm_text_fallback = message_resp.get("content")
     except Exception as e:
         print(f"Error al detectar herramientas en DeepSeek: {e}")
 
@@ -846,7 +910,7 @@ async def detectar_tools_en_ollama(messages_with_history, modelo_llm, pregunta_o
                 }
             })
 
-    return tool_calls_detected
+    return tool_calls_detected, llm_text_fallback
 
 
 async def generar_respuesta_ollama(messages_final, modelo_llm):
@@ -864,7 +928,7 @@ async def generar_respuesta_ollama(messages_final, modelo_llm):
         "temperature": 1.0,
     }
     if model_name == "deepseek-v4-pro":
-        payload_final["reasoning_effort"] = "medium"
+        payload_final["reasoning_effort"] = "low"
         payload_final["thinking"] = {"type": "enabled"}
     
     try:
@@ -935,7 +999,7 @@ async def api_chat(req: ChatRequest):
     )
 
     inicio_herramientas = time.time()
-    tool_calls_detected = await detectar_tools_en_ollama(messages_with_history, modelo_llm, pregunta_original, coleccion, tools_list)
+    tool_calls_detected, llm_text_fallback = await detectar_tools_en_ollama(messages_with_history, modelo_llm, pregunta_original, coleccion, tools_list)
 
     # Forzar ejecución directa si es RAG y LLM falló al detectar tool
     if ruta == "rag" and not tool_calls_detected:
@@ -958,7 +1022,8 @@ async def api_chat(req: ChatRequest):
             else:
                 messages_final = [{"role": "system", "content": prompt_sistema_final}] + messages_final[1:]
 
-            answer = await generar_respuesta_ollama(messages_final, modelo_llm)
+            model_name_final = "deepseek-v4-flash" if ruta in ("conversacional", "transaccional") else (modelo_llm if modelo_llm in ("deepseek-v4-flash", "deepseek-v4-pro") else "deepseek-v4-pro")
+            answer = await generar_respuesta_ollama(messages_final, model_name_final)
                 
             await asyncio.to_thread(session_store.guardar_mensaje, conversation_id, "assistant", answer, req.veterinary_id, user_id)
                 
@@ -982,7 +1047,7 @@ async def api_chat(req: ChatRequest):
 
     # CIERRE DE SEGURIDAD (SIN FALLBACK RAG)
     fin_total = time.time()
-    answer_fallback = "No pude identificar la información solicitada ni una herramienta adecuada para buscarla. ¿Podrías ser más específico o reformular tu pregunta?"
+    answer_fallback = llm_text_fallback if llm_text_fallback else "No pude identificar la información solicitada ni una herramienta adecuada para buscarla. ¿Podrías ser más específico o reformular tu pregunta?"
     await asyncio.to_thread(session_store.guardar_mensaje, conversation_id, "assistant", answer_fallback, req.veterinary_id, user_id)
     return {
         "answer": answer_fallback,
@@ -1049,7 +1114,7 @@ async def api_chat_stream(req: ChatRequest):
         )
 
         inicio_herramientas = time.time()
-        tool_calls_detected = await detectar_tools_en_ollama(messages_with_history, modelo_llm, pregunta_original, coleccion, tools_list)
+        tool_calls_detected, llm_text_fallback = await detectar_tools_en_ollama(messages_with_history, modelo_llm, pregunta_original, coleccion, tools_list)
 
         # Forzar ejecución directa si es RAG y LLM falló al detectar tool
         if ruta == "rag" and not tool_calls_detected:
@@ -1081,9 +1146,12 @@ async def api_chat_stream(req: ChatRequest):
         
         # 2. Si no hay contexto suficiente, enviar fallback
         if not prompt_sistema_final:
-            answer_fallback = "No pude identificar la información solicitada ni una herramienta adecuada para buscarla. ¿Podrías ser más específico o reformular tu pregunta?"
+            answer_fallback = llm_text_fallback if llm_text_fallback else "No pude identificar la información solicitada ni una herramienta adecuada para buscarla. ¿Podrías ser más específico o reformular tu pregunta?"
             await asyncio.to_thread(session_store.guardar_mensaje, conversation_id, "assistant", answer_fallback, req.veterinary_id, user_id)
-            yield f"event: error\ndata: {json.dumps({'message': answer_fallback})}\n\n"
+            if llm_text_fallback:
+                yield f"event: token\ndata: {json.dumps({'token': answer_fallback})}\n\n"
+            else:
+                yield f"event: error\ndata: {json.dumps({'message': answer_fallback})}\n\n"
             yield f"event: done\ndata: {json.dumps({'conversation_id': conversation_id, 'context': [], 'search_mode': 'none', 'concepts': [], 'metrics': {'retrieval_time_ms': int((fin_herramientas - inicio_herramientas) * 1000), 'llm_time_ms': 0, 'total_time_ms': int((fin_herramientas - inicio_total) * 1000), 'chunks_retrieved': 0, 'lexical_matches_count': 0, 'average_distance': 0.0}})}\n\n"
             return
 
@@ -1101,7 +1169,7 @@ async def api_chat_stream(req: ChatRequest):
             "Authorization": f"Bearer {os.environ.get('DEEPSEEK_KEY', '')}"
         }
         
-        model_name = "deepseek-v4-flash" if ruta == "conversacional" else (modelo_llm if modelo_llm in ("deepseek-v4-flash", "deepseek-v4-pro") else "deepseek-v4-pro")
+        model_name = "deepseek-v4-flash" if ruta in ("conversacional", "transaccional") else (modelo_llm if modelo_llm in ("deepseek-v4-flash", "deepseek-v4-pro") else "deepseek-v4-pro")
         
         payload_final = {
             "model": model_name,
@@ -1110,7 +1178,7 @@ async def api_chat_stream(req: ChatRequest):
             "temperature": 1.0,
         }
         if model_name == "deepseek-v4-pro":
-            payload_final["reasoning_effort"] = "high"
+            payload_final["reasoning_effort"] = "low"
             payload_final["thinking"] = {"type": "enabled"}
 
         inicio_llm = time.time()

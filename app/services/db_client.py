@@ -457,7 +457,10 @@ def buscar_mascota_por_nombre(nombre_mascota: str = None, veterinary_id: int = N
                         "dueno": row[7],
                         "telefono_dueno": row[8]
                     })
-                return {"status": "success", "found": True, "data": mascotas}
+                result = {"status": "success", "found": True, "count": len(mascotas), "data": mascotas[:5]}
+                if len(mascotas) > 5:
+                    result["nota"] = f"Se omitieron {len(mascotas) - 5} mascotas con este nombre. Pide al usuario que especifique el dueño para ubicarla con precisión."
+                return result
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
@@ -662,3 +665,115 @@ def buscar_info_contacto_dueno(nombre_dueno: str, veterinary_id: int = None, use
                 return {"status": "success", "found": True, "data": duenos}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+def listar_mascotas_con_citas(veterinary_id: int = None) -> dict:
+    """
+    Lista todas las mascotas que han tenido o tienen una cita con la veterinaria.
+    """
+    query = """
+        SELECT DISTINCT 
+            p.id, p.name, p.specie, p.breed, u.name as dueno
+        FROM pets p
+        JOIN appointments a ON p.id = a.pet_id
+        JOIN users_app u ON p.user_id = u.id
+        WHERE (%s::integer IS NULL OR a.veterinary_id = %s)
+    """
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (veterinary_id, veterinary_id))
+                rows = cur.fetchall()
+                if not rows:
+                    return {"status": "success", "found": False, "data": []}
+                
+                mascotas = [{"id": r[0], "nombre": r[1], "especie": r[2], "raza": r[3] if r[3] else "N/A", "dueno": r[4]} for r in rows]
+                result = {"status": "success", "found": True, "count": len(mascotas), "data": mascotas[:5]}
+                if len(mascotas) > 5:
+                    result["nota"] = f"Se omitieron {len(mascotas) - 5} mascotas de la lista. Si el usuario busca una específica, usa la herramienta de búsqueda por nombre."
+                return result
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+def filtrar_mascotas(especie: str = None, raza: str = None, veterinary_id: int = None) -> dict:
+    """Busca y cuenta mascotas filtrando por especie y/o raza en la base de datos."""
+    query = """
+        SELECT 
+            p.id, p.name, p.specie, p.breed, u.name as dueno
+        FROM pets p
+        JOIN users_app u ON p.user_id = u.id
+        WHERE EXISTS (
+            SELECT 1 FROM appointments a WHERE a.pet_id = p.id AND a.veterinary_id = %s
+        )
+    """
+    params = [veterinary_id]
+    
+    if especie:
+        query += " AND p.specie ILIKE %s"
+        params.append(f"%{especie}%")
+    if raza:
+        query += " AND p.breed ILIKE %s"
+        params.append(f"%{raza}%")
+        
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, tuple(params))
+                rows = cur.fetchall()
+                if not rows:
+                    return {"status": "success", "found": False, "count": 0, "data": []}
+                
+                mascotas = [{"id": r[0], "nombre": r[1], "especie": r[2], "raza": r[3] if r[3] else "N/A", "dueno": r[4]} for r in rows]
+                result = {"status": "success", "found": True, "count": len(mascotas), "data": mascotas[:5]}
+                if len(mascotas) > 5:
+                    result["nota"] = f"Se omitieron {len(mascotas) - 5} mascotas. Pide al usuario que use la búsqueda por nombre si necesita una específica."
+                return result
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+def cancelar_cita_por_nombre_mascota(nombre_mascota: str, nombre_dueno: str = None, veterinary_id: int = None) -> dict:
+    """Busca la mascota por nombre y cancela su cita pendiente más próxima de forma automática."""
+    # 1. Buscar mascota
+    mascotas_res = buscar_mascota_por_nombre(nombre_mascota, veterinary_id=veterinary_id)
+    if mascotas_res.get("status") == "error":
+        return mascotas_res
+    if not mascotas_res.get("found"):
+        return {"status": "success", "canceled": False, "message": f"No se encontró ninguna mascota llamada '{nombre_mascota}'."}
+    
+    mascotas = mascotas_res.get("data", [])
+    if nombre_dueno:
+        mascotas = [m for m in mascotas if nombre_dueno.lower() in m.get("dueno", "").lower()]
+        
+    if len(mascotas) > 1:
+        return {
+            "status": "multiple_found",
+            "message": "Se encontraron varias mascotas con ese nombre. Por favor, especifica el dueño.",
+            "data": mascotas
+        }
+    if len(mascotas) == 0:
+        return {"status": "success", "canceled": False, "message": f"No se encontró a '{nombre_mascota}' con el dueño '{nombre_dueno}'."}
+        
+    pet_id = mascotas[0]["id"]
+    pet_name = mascotas[0]["nombre"]
+    
+    # 2. Buscar citas pendientes
+    citas_res = buscar_citas_por_mascota(pet_name, veterinary_id=veterinary_id, pet_id=pet_id)
+    if citas_res.get("status") == "error":
+        return citas_res
+    if not citas_res.get("found"):
+        return {"status": "success", "canceled": False, "message": f"La mascota {pet_name} no tiene citas pendientes."}
+        
+    citas_pendientes = [c for c in citas_res.get("data", []) if c["estado"] in ("Pendiente", "Confirmada")]
+    
+    if not citas_pendientes:
+         return {"status": "success", "canceled": False, "message": f"La mascota {pet_name} no tiene citas pendientes para cancelar."}
+         
+    if len(citas_pendientes) > 1:
+        return {
+            "status": "multiple_found",
+            "message": f"La mascota {pet_name} tiene varias citas pendientes. Por favor indica la fecha u hora de la cita que deseas cancelar.",
+            "data": citas_pendientes
+        }
+        
+    # 3. Cancelar la única cita
+    appointment_id = citas_pendientes[0]["id"]
+    return actualizar_estado_cita(appointment_id, "Cancelada", motivo_cancelacion="Cancelado a petición vía IA", veterinary_id=veterinary_id)
