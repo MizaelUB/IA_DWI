@@ -28,3 +28,13 @@ python-multipart==0.0.20
 # Reranker y Búsqueda Híbrida
 sentence-transformers==3.0.1
 rank_bm25==0.2.2
+
+# Seguridad (Rate Limiting y JWT)
+slowapi==0.1.9
+PyJWT==2.10.1
+
+# Mailer (Servicio de correos)
+aiosmtplib==3.0.1
+dnspython==2.7.0
+google-auth==2.38.0
+aiolimiter==1.1.0

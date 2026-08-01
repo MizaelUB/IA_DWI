@@ -2,13 +2,12 @@
 
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import type { Cita, Mascota, Cliente, Veterinaria } from '@/lib/types';
-import { fetchVeterinarias, fetchCitas, fetchMascotas, fetchClientes } from '@/lib/api';
+import { fetchVeterinarias, fetchCitas, fetchMascotas } from '@/lib/api';
 import { useAuth } from './AuthContext';
 
 interface DashboardContextType {
   citas: Cita[];
   mascotas: Mascota[];
-  clientes: Cliente[];
   veterinarias: Veterinaria[];
   selectedVetId: string;
   setSelectedVetId: (id: string) => void;
@@ -22,7 +21,6 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const [citas, setCitas] = useState<Cita[]>([]);
   const [mascotas, setMascotas] = useState<Mascota[]>([]);
-  const [clientes, setClientes] = useState<Cliente[]>([]);
   const [veterinarias, setVeterinarias] = useState<Veterinaria[]>([]);
   const [selectedVetId, setSelectedVetId] = useState('');
   const [isLoading, setIsLoading] = useState(true);
@@ -30,14 +28,12 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
   const refresh = useCallback(async () => {
     setIsLoading(true);
     const vetId = selectedVetId || undefined;
-    const [c, m, cl] = await Promise.all([
+    const [c, m] = await Promise.all([
       fetchCitas(vetId),
       fetchMascotas(vetId),
-      fetchClientes(vetId),
     ]);
     setCitas(c);
     setMascotas(m);
-    setClientes(cl);
     setIsLoading(false);
   }, [selectedVetId]);
 
@@ -57,7 +53,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
 
   return (
     <DashboardContext.Provider
-      value={{ citas, mascotas, clientes, veterinarias, selectedVetId, setSelectedVetId, isLoading, refresh }}
+      value={{ citas, mascotas, veterinarias, selectedVetId, setSelectedVetId, isLoading, refresh }}
     >
       {children}
     </DashboardContext.Provider>

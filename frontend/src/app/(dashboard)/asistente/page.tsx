@@ -36,9 +36,10 @@ export default function AsistentePage() {
   }, [messages, toolIndicator]);
 
   useEffect(() => {
-    const pending = localStorage.getItem('pending_ai_prompt');
-    if (pending) {
-      localStorage.removeItem('pending_ai_prompt');
+    const match = document.cookie.split('; ').find(row => row.startsWith('pending_ai_prompt='));
+    if (match) {
+      const pending = decodeURIComponent(match.split('=')[1]);
+      document.cookie = 'pending_ai_prompt=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
       sendMessage(pending);
     }
   }, [sendMessage]);

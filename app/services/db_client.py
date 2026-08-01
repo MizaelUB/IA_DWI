@@ -355,7 +355,8 @@ def ver_citas_por_fecha(fecha_inicio: str = None, fecha_fin: str = None, veterin
             WHERE a.appointment_date >= %s::date
               AND (%s::integer IS NULL OR a.veterinary_id = %s)
               AND (%s IS NULL OR a.status ILIKE %s)
-            ORDER BY a.appointment_date ASC, a.hour ASC;
+            ORDER BY a.appointment_date ASC, a.hour ASC
+            LIMIT 20;
         """
     else:
         if not fecha_fin:
@@ -378,7 +379,8 @@ def ver_citas_por_fecha(fecha_inicio: str = None, fecha_fin: str = None, veterin
             WHERE a.appointment_date BETWEEN %s::date AND %s::date
               AND (%s::integer IS NULL OR a.veterinary_id = %s)
               AND (%s IS NULL OR a.status ILIKE %s)
-            ORDER BY a.appointment_date ASC, a.hour ASC;
+            ORDER BY a.appointment_date ASC, a.hour ASC
+            LIMIT 20;
         """
     try:
         with get_connection() as conn:
@@ -539,7 +541,7 @@ def buscar_dueno_mascota(pet_id: int = None, nombre_mascota: str = None, veterin
 def buscar_citas_por_estado(estado: str, veterinary_id: int = None, incluir_pasadas: bool = False) -> dict:
     if isinstance(incluir_pasadas, str):
         incluir_pasadas = incluir_pasadas.lower() in ("true", "1", "yes")
-    date_filter = "" if incluir_pasadas else "AND a.appointment_date >= CURRENT_DATE AND a.appointment_date <= CURRENT_DATE + INTERVAL '30 days'"
+    date_filter = "" if incluir_pasadas else "AND a.appointment_date >= CURRENT_DATE AND a.appointment_date <= CURRENT_DATE + INTERVAL '7 days'"
     query = f"""
         SELECT 
             a.id, a.pet_name, a.appointment_date, a.hour, a.status, a.total_cost, a.notes, v.name as veterinaria_nombre, a.pickup_requested, a.pickup_status, a.pet_id
@@ -548,7 +550,7 @@ def buscar_citas_por_estado(estado: str, veterinary_id: int = None, incluir_pasa
         WHERE a.status ILIKE %s AND (%s::integer IS NULL OR a.veterinary_id = %s)
         {date_filter}
         ORDER BY a.appointment_date DESC, a.hour DESC
-        LIMIT 50
+        LIMIT 15
     """
     try:
         from app.services.db_client import get_connection
@@ -668,7 +670,7 @@ def buscar_info_contacto_dueno(nombre_dueno: str, veterinary_id: int = None, use
 
 def listar_mascotas_con_citas(veterinary_id: int = None) -> dict:
     """
-    Lista todas las mascotas que han tenido o tienen una cita con la veterinaria.
+    Lista todas las mascotas que han tenido o tienen una cita con la veterinaria (máximo 20).
     """
     query = """
         SELECT DISTINCT 
@@ -677,6 +679,7 @@ def listar_mascotas_con_citas(veterinary_id: int = None) -> dict:
         JOIN appointments a ON p.id = a.pet_id
         JOIN users_app u ON p.user_id = u.id
         WHERE (%s::integer IS NULL OR a.veterinary_id = %s)
+        LIMIT 20
     """
     try:
         with get_connection() as conn:
@@ -695,7 +698,7 @@ def listar_mascotas_con_citas(veterinary_id: int = None) -> dict:
         return {"status": "error", "message": str(e)}
 
 def filtrar_mascotas(especie: str = None, raza: str = None, veterinary_id: int = None) -> dict:
-    """Busca y cuenta mascotas filtrando por especie y/o raza en la base de datos."""
+    """Busca y cuenta mascotas filtrando por especie y/o raza en la base de datos (máximo 20)."""
     query = """
         SELECT 
             p.id, p.name, p.specie, p.breed, u.name as dueno
@@ -714,6 +717,8 @@ def filtrar_mascotas(especie: str = None, raza: str = None, veterinary_id: int =
         query += " AND p.breed ILIKE %s"
         params.append(f"%{raza}%")
         
+    query += " LIMIT 20"
+
     try:
         with get_connection() as conn:
             with conn.cursor() as cur:

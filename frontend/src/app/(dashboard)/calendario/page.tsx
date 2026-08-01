@@ -16,7 +16,7 @@ export default function CalendarioPage() {
 
   const handleAskAI = useCallback(
     (prompt: string) => {
-      localStorage.setItem('pending_ai_prompt', prompt);
+      sessionStorage.setItem('pending_ai_prompt', prompt);
       router.push('/asistente');
     },
     [router],

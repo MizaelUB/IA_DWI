@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react';
 import type { ChatMessage } from '@/lib/types';
-import { fetchChatHistory, deleteChatHistory } from '@/lib/api';
+import { fetchChatHistory, deleteChatHistory, loginGuest } from '@/lib/api';
 
 interface ToolIndicator {
   tool: string;
@@ -13,7 +13,6 @@ export function useChatSSE(veterinaryId: number | null) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [toolIndicator, setToolIndicator] = useState<ToolIndicator | null>(null);
-  const [conversationId, setConversationId] = useState<string | null>(null);
   const [isHistoryLoaded, setIsHistoryLoaded] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -25,26 +24,25 @@ export function useChatSSE(veterinaryId: number | null) {
   };
 
   const loadHistory = useCallback(async () => {
-    const storedConvId = localStorage.getItem('conversation_id');
-    if (storedConvId) setConversationId(storedConvId);
-
-    let userId: number | undefined = undefined;
-    if (typeof window !== 'undefined') {
-      const stored = localStorage.getItem('clinic_session');
-      if (stored) {
-        try {
-          const parsed = JSON.parse(stored);
-          if (parsed && parsed.user_id) userId = parsed.user_id;
-        } catch {}
+    let isAuthenticated = false;
+    try {
+      const meRes = await fetch('/api/auth/me');
+      if (meRes.ok) {
+        isAuthenticated = true;
+      }
+    } catch {
+      isAuthenticated = false;
+    }
+    if (!isAuthenticated) {
+      try {
+        await loginGuest();
+      } catch (e) {
+        console.error("Failed to authenticate guest", e);
       }
     }
 
     try {
-      const data = await fetchChatHistory(storedConvId, veterinaryId, userId);
-      if (data.conversation_id) {
-        setConversationId(data.conversation_id);
-        localStorage.setItem('conversation_id', data.conversation_id);
-      }
+      const data = await fetchChatHistory();
       if (data.history && data.history.length > 0) {
         setMessages(
           data.history.map((msg, i) => ({
@@ -84,35 +82,21 @@ export function useChatSSE(veterinaryId: number | null) {
       setToolIndicator(null);
 
       try {
-        let userId: number | undefined = undefined;
-        if (typeof window !== 'undefined') {
-          const stored = localStorage.getItem('clinic_session');
-          if (stored) {
-            try {
-              const parsed = JSON.parse(stored);
-              if (parsed && parsed.user_id) userId = parsed.user_id;
-            } catch {}
-          }
-        }
-
         const response = await fetch('/api/chat/stream', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 
+            'Content-Type': 'application/json'
+          },
           body: JSON.stringify({
             question: text,
-            conversation_id: conversationId,
-            veterinary_id: veterinaryId,
-            user_id: userId,
           }),
         });
 
-        if (!response.ok) throw new Error('Network error');
-
-        const newConvId = response.headers.get('X-Conversation-Id');
-        if (newConvId) {
-          setConversationId(newConvId);
-          localStorage.setItem('conversation_id', newConvId);
+        if (response.status === 429) {
+          const errData = await response.json().catch(() => null);
+          throw new Error(errData?.message || 'Demasiadas solicitudes. Por favor, espera unos minutos antes de intentar de nuevo.');
         }
+        if (!response.ok) throw new Error('Network error');
 
         const reader = response.body!.getReader();
         const decoder = new TextDecoder();
@@ -141,6 +125,7 @@ export function useChatSSE(veterinaryId: number | null) {
                     setToolIndicator({ tool: data.tool, label: data.label || data.tool });
                     break;
                   case 'token':
+                    setToolIndicator(null);
                     accumulated += data.token;
                     setMessages((prev) =>
                       prev.map((m) => (m.id === streamId ? { ...m, content: accumulated } : m)),
@@ -179,11 +164,12 @@ export function useChatSSE(veterinaryId: number | null) {
             ),
           );
         }
-      } catch {
+      } catch (error: any) {
+        const errorMsg = error?.message || 'Ocurrió un error al procesar tu solicitud.';
         setMessages((prev) =>
           prev.map((m) =>
             m.id === streamId
-              ? { ...m, content: 'Ocurrió un error al procesar tu solicitud.', isStreaming: false }
+              ? { ...m, content: errorMsg, isStreaming: false }
               : m,
           ),
         );
@@ -192,25 +178,13 @@ export function useChatSSE(veterinaryId: number | null) {
         setToolIndicator(null);
       }
     },
-    [conversationId, veterinaryId, isStreaming],
+    [isStreaming],
   );
 
   const clearConversation = useCallback(async () => {
-    let userId: number | undefined = undefined;
-    if (typeof window !== 'undefined') {
-      const stored = localStorage.getItem('clinic_session');
-      if (stored) {
-        try {
-          const parsed = JSON.parse(stored);
-          if (parsed && parsed.user_id) userId = parsed.user_id;
-        } catch {}
-      }
-    }
-    await deleteChatHistory(conversationId, veterinaryId, userId);
-    setConversationId(null);
-    localStorage.removeItem('conversation_id');
+    await deleteChatHistory();
     setMessages([WELCOME_MSG]);
-  }, [conversationId, veterinaryId]);
+  }, []);
 
-  return { messages, isStreaming, toolIndicator, sendMessage, loadHistory, clearConversation, conversationId };
+  return { messages, isStreaming, toolIndicator, sendMessage, loadHistory, clearConversation };
 }

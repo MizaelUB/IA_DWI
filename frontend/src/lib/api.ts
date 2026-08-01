@@ -1,12 +1,12 @@
-import type { Cita, Mascota, Cliente, Veterinaria, LoginResponse, ChatHistoryResponse } from './types';
+import type { Cita, Mascota, Cliente, Veterinaria, LoginResponse, ChatHistoryResponse, RegisterRequest } from './types';
 
 const BASE = '';
 
-export async function login(username: string, password: string): Promise<LoginResponse> {
+export async function login(username: string, password: string, captchaId?: string, captchaAnswer?: string): Promise<LoginResponse & { detail?: any }> {
   const res = await fetch(`${BASE}/api/auth/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({ username, password, captcha_id: captchaId, captcha_answer: captchaAnswer }),
   });
   return res.json();
 }
@@ -33,34 +33,46 @@ export async function fetchMascotas(vetId?: string): Promise<Mascota[]> {
   if (data.status === 'success' && Array.isArray(data.data)) return data.data;
   return [];
 }
-
-export async function fetchClientes(vetId?: string): Promise<Cliente[]> {
-  const param = vetId ? `?veterinary_id=${vetId}` : '';
-  const res = await fetch(`${BASE}/api/dashboard/clientes${param}`);
-  const data = await res.json();
-  if (data.status === 'success' && Array.isArray(data.data)) return data.data;
-  return [];
+export interface PaginatedResponse<T> {
+  data: T[];
+  pagination: {
+    total: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+  };
 }
 
-export async function fetchChatHistory(conversationId?: string | null, vetId?: number | null, userId?: number | null): Promise<ChatHistoryResponse> {
-  let query = '';
-  if (conversationId) {
-    query = `?conversation_id=${encodeURIComponent(conversationId)}`;
-    if (userId) query += `&user_id=${userId}`;
-  } else if (vetId) {
-    query = `?veterinary_id=${vetId}&user_id=${userId || 1}`;
-  }
-  const res = await fetch(`${BASE}/api/chat/history${query}`);
+export async function fetchClientes(vetId?: string, page: number = 1, limit: number = 10): Promise<PaginatedResponse<Cliente>> {
+  const param = vetId ? `?veterinary_id=${vetId}&page=${page}&limit=${limit}` : `?page=${page}&limit=${limit}`;
+  const res = await fetch(`${BASE}/api/dashboard/clientes${param}`);
+  const data = await res.json();
+  if (data.status === 'success' && data.pagination) return { data: data.data, pagination: data.pagination };
+  return { data: [], pagination: { total: 0, page: 1, limit, total_pages: 1 } };
+}
+
+export async function loginGuest(): Promise<LoginResponse> {
+  const res = await fetch(`${BASE}/api/auth/guest`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' }
+  });
   return res.json();
 }
 
-export async function deleteChatHistory(conversationId?: string | null, vetId?: number | null, userId?: number | null): Promise<void> {
-  let query = '';
-  if (conversationId) {
-    query = `?conversation_id=${encodeURIComponent(conversationId)}`;
-    if (userId) query += `&user_id=${userId}`;
-  } else if (vetId) {
-    query = `?veterinary_id=${vetId}&user_id=${userId || 1}`;
-  }
-  await fetch(`${BASE}/api/chat/history${query}`, { method: 'DELETE' });
+export async function fetchChatHistory(): Promise<ChatHistoryResponse> {
+  const res = await fetch(`${BASE}/api/chat/history`);
+  return res.json();
+}
+
+export async function deleteChatHistory(): Promise<void> {
+  await fetch(`${BASE}/api/chat/history`, { method: 'DELETE' });
+}
+
+export async function register(data: RegisterRequest): Promise<LoginResponse & { detail?: any; message?: string }> {
+  const res = await fetch(`${BASE}/api/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return res.json();
 }

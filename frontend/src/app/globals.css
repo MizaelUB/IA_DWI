@@ -27,6 +27,7 @@
     /* Text */
     --ink: #2A2018;
     --text: #3A2F26;
+    --text-main: #3A2F26;
     --text-muted: #8A7868;
     --text-subtle: #A89886;
 
@@ -185,6 +186,84 @@ ul { list-style: none; }
 .field input:focus { border-color: var(--primary); background: var(--surface); box-shadow: 0 0 0 4px var(--primary-soft); outline: none; }
 
 .login-error { color: #B23B30; font-size: 0.85rem; min-height: 1em; text-align: center; }
+
+/* Auth toggle */
+.auth-toggle {
+    display: flex; gap: 4px; padding: 4px;
+    background: var(--surface-sunken); border-radius: var(--r-pill);
+    margin-bottom: 24px;
+}
+.auth-toggle-btn {
+    flex: 1; padding: 10px 16px; border-radius: var(--r-pill);
+    font-weight: 600; font-size: 0.88rem; color: var(--text-muted);
+    transition: all .2s var(--ease);
+}
+.auth-toggle-btn:hover { color: var(--text); }
+.auth-toggle-btn.active {
+    background: var(--surface); color: var(--primary-700);
+    box-shadow: var(--sh-sm);
+}
+
+/* Field validation states */
+.field--error input { border-color: #ef4444; background: #fef2f2; }
+.field--error input:focus { box-shadow: 0 0 0 3px rgba(239,68,68,0.15); border-color: #ef4444; }
+.field--valid input { border-color: var(--sage); }
+.field--valid input:focus { box-shadow: 0 0 0 3px rgba(94,155,134,0.15); border-color: var(--sage); }
+.field-error {
+    display: block; color: #ef4444; font-size: 0.78rem; font-weight: 500;
+    margin-top: 4px; padding-left: 2px;
+    animation: fadeUp .2s var(--ease-out) both;
+}
+
+/* Wide card for register */
+.login-card--wide { max-width: 520px; }
+.login-form--register {
+    gap: 14px; max-height: calc(100vh - 200px); overflow-y: auto;
+    padding-right: 4px; scrollbar-width: thin;
+}
+
+/* Register form sections */
+.form-section-title {
+    font-size: 0.78rem; font-weight: 700; color: var(--primary);
+    text-transform: uppercase; letter-spacing: 0.06em;
+    margin-top: 12px; padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+}
+
+/* Auth divider */
+.auth-divider {
+    display: flex; align-items: center; gap: 12px;
+    font-size: 0.82rem; color: var(--text-subtle); margin: 4px 0;
+}
+.auth-divider::before, .auth-divider::after {
+    content: ""; flex: 1; height: 1px; background: var(--border);
+}
+
+/* Auth success box */
+.auth-success-box { padding: 24px; text-align: center; }
+.auth-success-icon {
+    width: 56px; height: 56px; margin: 0 auto 16px;
+    border-radius: 50%; display: grid; place-items: center;
+    font-size: 1.5rem; color: #fff;
+    background: linear-gradient(135deg, var(--sage), #4a8b73);
+    box-shadow: 0 6px 18px rgba(94,155,134,0.3);
+}
+.auth-success-msg { color: var(--text); margin-bottom: 12px; line-height: 1.6; font-weight: 500; }
+.auth-success-sub { color: var(--text-muted); margin-bottom: 24px; font-size: 0.88rem; line-height: 1.5; }
+
+/* Captcha */
+.captcha-field { margin-top: 4px; }
+.captcha-question {
+    font-weight: 700; font-size: 1.15rem; color: var(--text);
+    display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+}
+.captcha-img { width: 38px; height: 38px; border-radius: 6px; border: 1px solid var(--border); }
+.captcha-input {
+    width: 100%; padding: 10px 14px; border: 1px solid var(--border-strong);
+    border-radius: var(--r-md); background: var(--surface-soft);
+    color: var(--text); transition: border-color .18s var(--ease), box-shadow .18s var(--ease);
+}
+.captcha-input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); outline: none; }
 
 @media (max-width: 900px) {
     .login { flex-direction: column; }
@@ -558,6 +637,9 @@ ul { list-style: none; }
 .msg-body strong { font-weight: 700; }
 .message.bot .msg-body strong { color: var(--terracotta); }
 .msg-body code { font-family: ui-monospace, monospace; font-size: 0.84rem; background: var(--surface-sunken); padding: 1px 5px; border-radius: 4px; }
+.msg-body table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 0.86rem; }
+.msg-body th, .msg-body td { border: 1px solid var(--border-strong); padding: 8px 10px; text-align: left; }
+.msg-body th { background: var(--surface-soft); font-weight: 700; color: var(--text); }
 
 .chat-foot { flex: none; border-top: 1px solid var(--border); padding: 14px 16px 16px; background: var(--surface); display: flex; flex-direction: column; gap: 12px; }
 .suggest-row { display: flex; gap: 8px; flex-wrap: wrap; }

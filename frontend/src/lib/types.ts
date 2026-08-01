@@ -63,5 +63,22 @@ export interface LoginResponse {
   veterinary_id: number | null;
   veterinary_name: string;
   user_id?: number;
+  access_token?: string;
+  token_type?: string;
   detail?: string;
+  message?: string;
+}
+
+export interface RegisterRequest {
+  username?: string;
+  password: string;
+  email: string;
+  full_name: string;
+  phone: string;
+  doctor_license: string;
+  vet_name: string;
+  vet_city: string;
+  vet_address?: string;
+  vet_phone?: string;
+  vet_email?: string;
 }

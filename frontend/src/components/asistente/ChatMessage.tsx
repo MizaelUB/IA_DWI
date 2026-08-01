@@ -5,6 +5,8 @@ import { SparklesIcon } from '@/components/ui/Icons';
 import { escapeHtml } from '@/lib/utils';
 import type { ChatMessage as ChatMessageType } from '@/lib/types';
 
+import DOMPurify from 'dompurify';
+
 export function ChatMessageView({ msg }: { msg: ChatMessageType }) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const [parsedHtml, setParsedHtml] = useState('');
@@ -13,10 +15,11 @@ export function ChatMessageView({ msg }: { msg: ChatMessageType }) {
     if (msg.isMarkdown && msg.content) {
       import('marked').then(({ marked }) => {
         const result = marked.parse(msg.content);
+        const sanitize = (rawHtml: string) => typeof window !== 'undefined' ? DOMPurify.sanitize(rawHtml) : rawHtml;
         if (result instanceof Promise) {
-          result.then((html) => setParsedHtml(html));
+          result.then((html) => setParsedHtml(sanitize(html)));
         } else {
-          setParsedHtml(result);
+          setParsedHtml(sanitize(result));
         }
       });
     }

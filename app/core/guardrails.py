@@ -97,6 +97,7 @@ def _build_patterns() -> List[PatternEntry]:
         ("IL-022", Severity.HIGH, 50, r'(?i)\b(dump|extract|leak)\s+(your|the)\s+(prompt|instructions|memory|context|config)\b', "EN: Dump/extract/leak prompt"),
         ("IL-023", Severity.CRITICAL, 70, r'(?i)\bwhat\s+(are|were)\s+you\s+(told|instructed|programmed|designed)\s+to\s+do\b', "EN: What were you instructed to do"),
         ("IL-024", Severity.HIGH, 50, r'(?i)\b(cu[aá]les?\s+son|dime)\s+(tus?\s+)?(reglas|restricciones|directrices|limitaciones)\b', "ES: Cuáles son tus reglas"),
+        ("IL-025", Severity.HIGH, 65, r'(?i)\b(translate|übersetze|traduis|traduza|traducir)\b.*\b(prompt|instrucciones|instructions|system|rules|reglas)\b', "Multilingual: Translate prompt"),
     ]
     for id_, sev, score, pattern, desc in IL:
         P.append(PatternEntry(id_, "instruction_leak", sev, score, C(pattern), desc))
@@ -498,7 +499,7 @@ async def middleware_guardrails(request, call_next):
                     content={
                         "blocked": True,
                         "score": result.score,
-                        "reasons": result.reasons,
+                        "reasons": [],
                         "response": DEFENSIVE_RESPONSE,
                     },
                 )

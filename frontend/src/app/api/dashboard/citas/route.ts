@@ -1,16 +1,33 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getJwtFromRequest } from '@/lib/serverAuth';
 
 export const dynamic = 'force-dynamic';
 
 const FASTAPI_URL = process.env.FASTAPI_URL || 'http://localhost:8000';
 
 export async function GET(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const vetId = searchParams.get('veterinary_id');
-  const url = vetId
-    ? `${FASTAPI_URL}/api/dashboard/citas?veterinary_id=${vetId}`
-    : `${FASTAPI_URL}/api/dashboard/citas`;
-  const res = await fetch(url);
-  const data = await res.json();
-  return NextResponse.json(data);
+  const { token, payload } = getJwtFromRequest(request);
+  if (!token) {
+    return NextResponse.json({ error: 'No autorizado - Token de autenticación requerido' }, { status: 401 });
+  }
+
+  // Prevención IDOR: La validación real de los permisos y el token
+  // ocurre en el backend FastAPI de manera segura (con firma JWT verificada).
+
+  // Prevención IDOR: Eliminar parámetro externo y delegar al token en backend
+  const url = `${FASTAPI_URL}/api/dashboard/citas`;
+
+  try {
+    const res = await fetch(url, {
+      headers: { 
+        'Authorization': `Bearer ${token}`,
+        'X-Forwarded-For': request.ip || request.headers.get('x-forwarded-for') || ''
+      },
+    });
+    const data = await res.json();
+    return NextResponse.json(data, { status: res.status });
+  } catch (err) {
+    return NextResponse.json({ error: 'Error al conectar con backend' }, { status: 500 });
+  }
 }
+
